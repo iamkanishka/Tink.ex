@@ -144,24 +144,24 @@ defmodule Tink.MixProject do
       "guides/configuration.md",
 
       # Product guides
-      "guides/account-check.md",
-      "guides/balance-check.md",
-      "guides/business-account-check.md",
-      "guides/transactions.md",
-      "guides/income-check.md",
-      "guides/expense-check.md",
-      "guides/risk-insights.md",
-      "guides/investments.md",
-      "guides/loans.md",
-      "guides/budgets.md",
+      "guides/products/account-check.md",
+      "guides/products/balance-check.md",
+      "guides/products/business-account-check.md",
+      "guides/products/transactions.md",
+      "guides/products/income-check.md",
+      "guides/products/expense-check.md",
+      "guides/products/risk-insights.md",
+      "guides/products/investments.md",
+      "guides/products/loans.md",
+      "guides/products/budgets.md",
 
       # Advanced guides
-      "guides/error-handling.md",
-      "guides/testing.md",
-      "guides/rate-limiting.md",
-      "guides/caching.md",
-      "guides/telemetry.md",
-      "guides/webhooks.md"
+      "guides/advanced/error-handling.md",
+      "guides/advanced/testing.md",
+      "guides/advanced/rate-limiting.md",
+      "guides/advanced/caching.md",
+      "guides/advanced/telemetry.md",
+      "guides/advanced/webhooks.md"
     ]
   end
 
