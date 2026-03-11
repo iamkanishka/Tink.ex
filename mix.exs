@@ -123,7 +123,7 @@ defmodule Tink.MixProject do
       extras: extras(),
       groups_for_extras: groups_for_extras(),
       groups_for_modules: groups_for_modules(),
-      groups_for_functions: [
+      groups_for_docs: [
         "API Resources": &(&1[:section] == :api),
         Configuration: &(&1[:section] == :config),
         Utilities: &(&1[:section] == :util)
