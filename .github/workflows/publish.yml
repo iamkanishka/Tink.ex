@@ -205,7 +205,7 @@ jobs:
         run: |
           mix local.hex --force
           mix local.rebar --force
-          mix deps.get --only prod
+          mix deps.get
 
       - name: Build docs
         run: mix docs
@@ -216,4 +216,4 @@ jobs:
         run: mix hex.publish --yes
         env:
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
-          MIX_ENV: prod
+          MIX_ENV: dev
