@@ -12,6 +12,7 @@ config :tink,
   receive_timeout: 5_000,
   http_adapter: Tink.MockHTTPAdapter,
   debug_mode: false,
+  enable_rate_limiting: false,
 
   # NOTE: All nested keyword lists must be fully specified here — Elixir's
   # config merges these by replacement, not recursively.
@@ -39,12 +40,6 @@ config :tink,
     max_delay: 0,
     retry_on_status: [],
     retry_on_errors: []
-  ],
-  rate_limit: [
-    enabled: false,
-    max_requests: 0,
-    interval: 0,
-    strategy: :stop_and_wait
   ]
 
 # =============================================================================
@@ -56,12 +51,10 @@ config :tink, Tink.Finch,
     default: [
       size: 2,
       count: 1,
+      max_idle_time: :timer.seconds(5),
+      protocol: :http1,
       conn_opts: [
         timeout: 5_000
-      ],
-      pool_opts: [
-        max_idle_time: :timer.seconds(5),
-        protocol: :http1
       ]
     ]
   }
@@ -106,47 +99,17 @@ config :joken,
   ]
 
 # =============================================================================
-# Test Mocking
+# Test Tooling
 # =============================================================================
 
 config :tink, :mox, verify_on_exit: true
 
-config :bypass,
-  enable_debug_log: false
-
-# =============================================================================
-# Test Coverage
-# =============================================================================
+config :bypass, enable_debug_log: false
 
 config :excoveralls,
   test_coverage: [
     tool: ExCoveralls,
     summary: true,
     print_summary: true
-  ]
-
-config :excoveralls, :exclude,
-  test: true,
-  ignored_modules: [
-    Tink.MockHTTPAdapter
-  ]
-
-# =============================================================================
-# Async Testing
-# =============================================================================
-
-config :tink, :test,
-  async: true,
-  max_cases: System.schedulers_online() * 2
-
-# =============================================================================
-# Test Database (uncomment if using Ecto)
-# =============================================================================
-
-# config :tink, Tink.Repo,
-#   username: "postgres",
-#   password: "postgres",
-#   hostname: "localhost",
-#   database: "tink_test#{System.get_env("MIX_TEST_PARTITION")}",
-#   pool: Ecto.Adapters.SQL.Sandbox,
-#   pool_size: 10
+  ],
+  ignore_modules: [Tink.MockHTTPAdapter]

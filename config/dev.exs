@@ -9,6 +9,7 @@ config :tink,
   timeout: 15_000,
   receive_timeout: 15_000,
   debug_mode: true,
+  enable_rate_limiting: false,
 
   # NOTE: All nested keyword lists must be fully specified here — Elixir's
   # config merges these by replacement, not recursively.
@@ -36,12 +37,6 @@ config :tink,
     max_delay: 5_000,
     retry_on_status: [429, 500, 502, 503, 504],
     retry_on_errors: [:timeout, :network_error, :connection_closed]
-  ],
-  rate_limit: [
-    enabled: false,
-    max_requests: 100,
-    interval: :timer.seconds(60),
-    strategy: :stop_and_wait
   ]
 
 # =============================================================================
@@ -53,12 +48,10 @@ config :tink, Tink.Finch,
     default: [
       size: 10,
       count: 1,
+      max_idle_time: :timer.seconds(30),
+      protocol: :http1,
       conn_opts: [
         timeout: 15_000
-      ],
-      pool_opts: [
-        max_idle_time: :timer.seconds(30),
-        protocol: :http1
       ]
     ]
   }

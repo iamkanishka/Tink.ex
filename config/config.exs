@@ -9,12 +9,9 @@ config :tink,
   http_adapter: Tink.HTTPAdapter,
   timeout: 30_000,
   receive_timeout: 30_000,
-  rate_limit: [
-    enabled: false,
-    max_requests: 100,
-    interval: :timer.seconds(60),
-    strategy: :stop_and_wait
-  ],
+  # Flat key read by Config.rate_limiting_enabled?() which gates the Hammer
+  # supervisor child and all RateLimiter.check/2 calls.
+  enable_rate_limiting: false,
   cache: [
     enabled: true,
     default_ttl: :timer.minutes(5),
@@ -44,12 +41,16 @@ config :tink,
 # =============================================================================
 # Finch HTTP Client Pool Configuration
 # =============================================================================
+# Note: pool_opts was removed in Finch 0.16. max_idle_time and protocol are
+# now top-level options alongside size, count, and conn_opts.
 
 config :tink, Tink.Finch,
   pools: %{
     default: [
       size: 32,
       count: 1,
+      max_idle_time: :timer.seconds(30),
+      protocol: :http1,
       conn_opts: [
         timeout: 30_000,
         transport_opts: [
@@ -59,13 +60,17 @@ config :tink, Tink.Finch,
             match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
           ]
         ]
-      ],
-      pool_opts: [
-        max_idle_time: :timer.seconds(30),
-        protocol: :http1
       ]
     ]
   }
+
+# =============================================================================
+# Hammer Rate Limiter Backend
+# =============================================================================
+# Hammer 7.2 uses `use Hammer, backend: :ets` — the backend is self-configuring
+# via start_link/1. clean_period controls the ETS cleanup GenServer interval.
+
+config :tink, Tink.RateLimiter.Backend, clean_period: :timer.minutes(5)
 
 # =============================================================================
 # Telemetry & Logging
@@ -96,18 +101,6 @@ config :oauth2,
 # JWT signer is set per-environment in runtime.exs
 config :joken,
   default_signer: nil
-
-# =============================================================================
-# Hammer Rate Limiter Backend Configuration
-# =============================================================================
-
-config :tink, Tink.RateLimiter.Backend,
-  backend:
-    {Hammer.Backend.ETS,
-     [
-       expiry_ms: :timer.hours(2),
-       cleanup_rate_ms: :timer.minutes(10)
-     ]}
 
 # =============================================================================
 # Import Environment-Specific Configuration

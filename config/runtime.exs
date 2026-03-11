@@ -6,7 +6,7 @@ import Config
 # Executed at runtime (not compile time). Loaded AFTER prod.exs.
 # All sensitive credentials and environment-specific overrides live here.
 
-if config_env() in [:prod, :staging] do
+if config_env() == :prod do
   # ==========================================================================
   # Tink API Credentials (REQUIRED)
   # ==========================================================================
@@ -54,20 +54,27 @@ if config_env() in [:prod, :staging] do
   end
 
   # ==========================================================================
-  # HTTP Pool Configuration
+  # Production HTTP Pool
   # ==========================================================================
+  # Set here (not prod.exs) for two reasons:
+  #   1. count uses System.schedulers_online() which must reflect the actual
+  #      production host, not the build machine.
+  #   2. transport_opts calls :public_key.pkix_verify_hostname_match_fun/1
+  #      which returns a closure — closures cannot be stored in compile-time config.
 
-  # Set pool count at runtime so it reflects the actual host's scheduler count,
-  # not the build machine's (System.schedulers_online() in prod.exs would
-  # capture the build machine's value at compile time).
-  pool_size = System.get_env("TINK_POOL_SIZE")
+  pool_size =
+    case System.get_env("TINK_POOL_SIZE") do
+      nil -> 100
+      value -> String.to_integer(value)
+    end
 
   config :tink, Tink.Finch,
     pools: %{
       default: [
-        size: if(pool_size, do: String.to_integer(pool_size), else: 100),
-        # Sized to match the VM's actual schedulers at runtime
+        size: pool_size,
         count: System.schedulers_online(),
+        max_idle_time: :timer.minutes(5),
+        protocol: :http2,
         conn_opts: [
           timeout: 30_000,
           transport_opts: [
@@ -79,10 +86,6 @@ if config_env() in [:prod, :staging] do
             ],
             versions: [:"tlsv1.2", :"tlsv1.3"]
           ]
-        ],
-        pool_opts: [
-          max_idle_time: :timer.minutes(5),
-          protocol: :http2
         ]
       ]
     }
@@ -110,8 +113,8 @@ if config_env() in [:prod, :staging] do
       value -> String.to_integer(value)
     end
 
-  # Uses the 3-arg config form which deep-merges keyword lists, preserving
-  # the per-resource `ttls` map set in prod.exs.
+  # 3-arg config form deep-merges keyword lists, preserving the per-resource
+  # ttls map set in prod.exs.
   config :tink, :cache,
     enabled: cache_enabled,
     default_ttl: cache_ttl,
@@ -128,16 +131,7 @@ if config_env() in [:prod, :staging] do
       _ -> true
     end
 
-  rate_limit_max =
-    case System.get_env("TINK_RATE_LIMIT_MAX") do
-      nil -> 100
-      value -> String.to_integer(value)
-    end
-
-  # Uses the 3-arg form to deep-merge, preserving interval and strategy.
-  config :tink, :rate_limit,
-    enabled: rate_limit_enabled,
-    max_requests: rate_limit_max
+  config :tink, enable_rate_limiting: rate_limit_enabled
 
   # ==========================================================================
   # JWT/Joken
@@ -188,7 +182,7 @@ if config_env() in [:prod, :staging] do
   config :logger, level: log_level
 
   # ==========================================================================
-  # Debug Mode (for troubleshooting production issues)
+  # Debug Mode
   # ==========================================================================
 
   debug_mode =
@@ -199,38 +193,6 @@ if config_env() in [:prod, :staging] do
     end
 
   config :tink, debug_mode: debug_mode
-
-  # ==========================================================================
-  # Staging-specific overrides
-  # ==========================================================================
-
-  if config_env() == :staging do
-    # Staging logs at debug level for easier diagnostics
-    config :logger, level: :debug
-
-    # Use a smaller cache in staging to avoid stale data confusion
-    config :tink, :cache,
-      enabled: true,
-      max_size: 1000
-  end
-
-  # ==========================================================================
-  # Database (uncomment if using Ecto)
-  # ==========================================================================
-
-  # database_url =
-  #   System.get_env("DATABASE_URL") ||
-  #     raise """
-  #     Environment variable DATABASE_URL is missing.
-  #     For example: ecto://USER:PASS@HOST/DATABASE
-  #     """
-  #
-  # maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
-  #
-  # config :tink, Tink.Repo,
-  #   url: database_url,
-  #   pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
-  #   socket_options: maybe_ipv6
 end
 
 # =============================================================================
