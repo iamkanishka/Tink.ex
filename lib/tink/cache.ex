@@ -210,8 +210,7 @@ defmodule Tink.Cache do
   @spec build_key([String.t() | atom()]) :: String.t()
   def build_key(components) when is_list(components) do
     components
-    |> Enum.map(&to_string/1)
-    |> Enum.join(":")
+    |> Enum.map_join(":", &to_string/1)
   end
 
   @doc """

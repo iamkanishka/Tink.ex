@@ -165,15 +165,13 @@ defmodule Tink.HTTPAdapter do
         _ -> nil
       end)
 
-    cond do
-      content_type =~ "application/x-www-form-urlencoded" ->
-        {:ok, URI.encode_query(body)}
-
-      true ->
-        case Jason.encode(body) do
-          {:ok, encoded} -> {:ok, encoded}
-          {:error, reason} -> {:error, %{type: :encode_error, reason: reason}}
-        end
+    if content_type =~ "application/x-www-form-urlencoded" do
+      {:ok, URI.encode_query(body)}
+    else
+      case Jason.encode(body) do
+        {:ok, encoded} -> {:ok, encoded}
+        {:error, reason} -> {:error, %{type: :encode_error, reason: reason}}
+      end
     end
   end
 

@@ -57,8 +57,7 @@ defmodule Tink.Helpers do
   def build_query_string(params) when is_list(params) or is_map(params) do
     params
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-    |> Enum.map(&encode_param/1)
-    |> Enum.join("&")
+    |> Enum.map_join("&", &encode_param/1)
   end
 
   @doc """

@@ -158,7 +158,7 @@ defmodule Tink.Retry do
             retry_fn
           )
         else
-          reason = if not should_retry, do: "error not retryable", else: "max attempts reached"
+          reason = if should_retry, do: "error not retryable", else: "max attempts reached"
           log_no_retry(error, reason)
           failure
         end
