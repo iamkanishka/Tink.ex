@@ -6,15 +6,11 @@ import Config
 
 config :tink,
   base_url: "https://test-api.tink.com",
-
   client_id: "test_client_id",
   client_secret: "test_client_secret",
-
   timeout: 5_000,
   receive_timeout: 5_000,
-
   http_adapter: Tink.MockHTTPAdapter,
-
   debug_mode: false,
 
   # NOTE: All nested keyword lists must be fully specified here — Elixir's
@@ -35,7 +31,6 @@ config :tink,
       users: 0
     }
   ],
-
   retry: [
     enabled: false,
     max_attempts: 1,
@@ -45,7 +40,6 @@ config :tink,
     retry_on_status: [],
     retry_on_errors: []
   ],
-
   rate_limit: [
     enabled: false,
     max_requests: 0,
@@ -115,8 +109,7 @@ config :joken,
 # Test Mocking
 # =============================================================================
 
-config :tink, :mox,
-  verify_on_exit: true
+config :tink, :mox, verify_on_exit: true
 
 config :bypass,
   enable_debug_log: false

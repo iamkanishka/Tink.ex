@@ -6,10 +6,8 @@ import Config
 
 config :tink,
   base_url: System.get_env("TINK_API_URL", "https://api.tink.com"),
-
   timeout: 15_000,
   receive_timeout: 15_000,
-
   debug_mode: true,
 
   # NOTE: All nested keyword lists must be fully specified here — Elixir's
@@ -30,7 +28,6 @@ config :tink,
       users: :timer.minutes(30)
     }
   ],
-
   retry: [
     enabled: true,
     max_attempts: 3,
@@ -40,7 +37,6 @@ config :tink,
     retry_on_status: [429, 500, 502, 503, 504],
     retry_on_errors: [:timeout, :network_error, :connection_closed]
   ],
-
   rate_limit: [
     enabled: false,
     max_requests: 100,
