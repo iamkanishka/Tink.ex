@@ -1,34 +1,26 @@
 import Config
 
-# Base configuration for TinkEx library
-# Environment-specific configs are in dev.exs, test.exs, prod.exs
-
 # =============================================================================
-# TinkEx Core Configuration
+# Tink Core Configuration
 # =============================================================================
 
-config :tink_ex,
-  # API Base URL
+config :tink,
   base_url: "https://api.tink.com",
-  
-  # HTTP Client Settings
-  http_adapter: TinkEx.HTTPAdapter,
+  http_adapter: Tink.HTTPAdapter,
   timeout: 30_000,
   receive_timeout: 30_000,
-  
-  # Rate Limiting (optional - requires hammer dependency)
+
   rate_limit: [
     enabled: false,
     max_requests: 100,
-    interval: :timer.seconds(60)
+    interval: :timer.seconds(60),
+    strategy: :stop_and_wait
   ],
-  
-  # Cache Settings (optional - requires cachex dependency)
+
   cache: [
     enabled: true,
     default_ttl: :timer.minutes(5),
     max_size: 1000,
-    # Resource-specific TTLs (in milliseconds)
     ttls: %{
       providers: :timer.hours(1),
       categories: :timer.hours(24),
@@ -40,36 +32,30 @@ config :tink_ex,
       users: :timer.minutes(10)
     }
   ],
-  
-  # Retry Configuration
+
   retry: [
     enabled: true,
     max_attempts: 3,
     backoff_multiplier: 2,
     initial_delay: 1_000,
     max_delay: 10_000,
-    # HTTP status codes to retry
     retry_on_status: [429, 500, 502, 503, 504],
-    # Error types to retry
     retry_on_errors: [:timeout, :network_error, :connection_closed]
   ],
-  
-  # Debug mode
+
   debug_mode: false
 
 # =============================================================================
 # Finch HTTP Client Pool Configuration
 # =============================================================================
 
-config :tink_ex, TinkEx.Finch,
+config :tink, Tink.Finch,
   pools: %{
     default: [
       size: 32,
       count: 1,
-      # Connection settings
       conn_opts: [
         timeout: 30_000,
-        # TLS/SSL settings
         transport_opts: [
           verify: :verify_peer,
           depth: 3,
@@ -78,7 +64,6 @@ config :tink_ex, TinkEx.Finch,
           ]
         ]
       ],
-      # Pool settings
       pool_opts: [
         max_idle_time: :timer.seconds(30),
         protocol: :http1
@@ -94,34 +79,42 @@ config :logger, :console,
   format: "$time $metadata[$level] $message\n",
   metadata: [:request_id, :module, :function]
 
-# Configure telemetry events
-config :tink_ex, :telemetry,
+config :tink, :telemetry,
   events: [
-    [:tink_ex, :request, :start],
-    [:tink_ex, :request, :stop],
-    [:tink_ex, :request, :exception],
-    [:tink_ex, :cache, :hit],
-    [:tink_ex, :cache, :miss]
+    [:tink, :request, :start],
+    [:tink, :request, :stop],
+    [:tink, :request, :exception],
+    [:tink, :cache, :hit],
+    [:tink, :cache, :miss]
   ]
 
 # =============================================================================
-# OAuth & JWT (optional)
+# OAuth & JWT
 # =============================================================================
 
-# OAuth2 client configuration (if using oauth2 library)
 config :oauth2,
   serializers: %{
     "application/json" => Jason
   }
 
-# Joken JWT configuration (if using joken library)
+# JWT signer is set per-environment in runtime.exs
 config :joken,
-  default_signer: nil  # Set in runtime.exs from env vars
+  default_signer: nil
+
+# =============================================================================
+# Hammer Rate Limiter Backend Configuration
+# =============================================================================
+
+config :tink, Tink.RateLimiter.Backend,
+  backend:
+    {Hammer.Backend.ETS,
+     [
+       expiry_ms: :timer.hours(2),
+       cleanup_rate_ms: :timer.minutes(10)
+     ]}
 
 # =============================================================================
 # Import Environment-Specific Configuration
 # =============================================================================
 
-# Import environment-specific config. This must remain at the bottom
-# of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"
