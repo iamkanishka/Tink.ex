@@ -1,12 +1,12 @@
-defmodule TinkEx.MixProject do
+defmodule Tink.MixProject do
   use Mix.Project
 
-  @version "1.0.0"
-  @source_url "https://github.com/yourusername/tink_ex"
+  @version "0.1.1"
+  @source_url "https://github.com/iamkanishka/tink.ex"
 
   def project do
     [
-      app: :tink_ex,
+      app: :tink,
       version: @version,
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
@@ -14,7 +14,7 @@ defmodule TinkEx.MixProject do
       description: description(),
       package: package(),
       docs: docs(),
-      name: "TinkEx",
+      name: "Tink",
       source_url: @source_url,
       homepage_url: @source_url,
 
@@ -43,14 +43,14 @@ defmodule TinkEx.MixProject do
 
   def application do
     [
-      extra_applications: [:logger, :crypto, :ssl],
-      mod: {TinkEx.Application, []}
+      extra_applications: [:logger, :crypto, :ssl, :public_key],
+      mod: {Tink.Application, []}
     ]
   end
 
   defp deps do
     [
-      # HTTP client (Production)
+      # HTTP client
       {:finch, "~> 0.21"},
       {:jason, "~> 1.4"},
       {:mint, "~> 1.7"},
@@ -68,10 +68,10 @@ defmodule TinkEx.MixProject do
 
       # Caching & Rate Limiting (Optional)
       {:cachex, "~> 4.1", optional: true},
-      {:hammer, "~> 7.1", optional: true},
+      {:hammer, "~> 7.2", optional: true},
 
       # Development & Documentation
-      {:ex_doc, "~> 0.35", only: :dev, runtime: false},
+      {:ex_doc, "~> 0.40", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:excoveralls, "~> 0.18", only: :test, runtime: false},
@@ -85,15 +85,16 @@ defmodule TinkEx.MixProject do
 
   defp description do
     """
-    Production-ready Elixir client for the Tink API. Provides comprehensive
-    access to account aggregation, transaction data, financial insights,
-    account verification, income verification, and payment initiation services.
+    Production-ready Elixir client for the Tink open banking API. Provides
+    comprehensive access to account aggregation, transaction data, financial
+    insights, account verification, income verification, and payment initiation
+    services.
     """
   end
 
   defp package do
     [
-      name: "tink_ex",
+      name: "tink",
       files: ~w(
         lib
         .formatter.exs
@@ -106,27 +107,26 @@ defmodule TinkEx.MixProject do
       links: %{
         "GitHub" => @source_url,
         "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md",
-        "Documentation" => "https://hexdocs.pm/tink_ex"
+        "Documentation" => "https://hexdocs.pm/tink"
       },
-      maintainers: ["Your Name <your.email@example.com>"]
+      maintainers: ["Kanishka"]
     ]
   end
 
   defp docs do
     [
       main: "readme",
-      name: "TinkEx",
+      name: "Tink",
       source_ref: "v#{@version}",
-      canonical: "https://hexdocs.pm/tink_ex",
+      canonical: "https://hexdocs.pm/tink",
       source_url: @source_url,
-      logo: "assets/logo.png",
       extras: extras(),
       groups_for_extras: groups_for_extras(),
       groups_for_modules: groups_for_modules(),
       groups_for_functions: [
         "API Resources": &(&1[:section] == :api),
-        "Configuration": &(&1[:section] == :config),
-        "Utilities": &(&1[:section] == :util)
+        Configuration: &(&1[:section] == :config),
+        Utilities: &(&1[:section] == :util)
       ]
     ]
   end
@@ -145,87 +145,90 @@ defmodule TinkEx.MixProject do
 
       # Product guides
       "guides/products/account-check.md",
+      "guides/products/balance-check.md",
+      "guides/products/business-account-check.md",
       "guides/products/transactions.md",
       "guides/products/income-check.md",
       "guides/products/expense-check.md",
       "guides/products/risk-insights.md",
-      "guides/products/payments.md",
+      "guides/products/investments.md",
+      "guides/products/loans.md",
+      "guides/products/budgets.md",
 
       # Advanced guides
       "guides/advanced/error-handling.md",
       "guides/advanced/testing.md",
       "guides/advanced/rate-limiting.md",
       "guides/advanced/caching.md",
-      "guides/advanced/telemetry.md"
+      "guides/advanced/telemetry.md",
+      "guides/advanced/webhooks.md"
     ]
   end
 
   defp groups_for_extras do
     [
       "Getting Started": ~r/guides\/(getting-started|authentication|configuration)/,
-      "Products": ~r/guides\/products/,
-      "Advanced": ~r/guides\/advanced/
+      Products: ~r/guides\/products/,
+      Advanced: ~r/guides\/advanced/
     ]
   end
 
   defp groups_for_modules do
     [
-      "Core": [
-        TinkEx,
-        TinkEx.Client,
-        TinkEx.Config,
-        TinkEx.Auth,
-        TinkEx.Error
+      Core: [
+        Tink,
+        Tink.Client,
+        Tink.Config,
+        Tink.Auth,
+        Tink.AuthToken,
+        Tink.Error
       ],
-
       "Account Aggregation": [
-        TinkEx.Transactions,
-        TinkEx.TransactionsOneTimeAccess,
-        TinkEx.TransactionsContinuousAccess,
-        TinkEx.Accounts,
-        TinkEx.Users,
-        TinkEx.Categories,
-        TinkEx.Statistics
+        Tink.Transactions,
+        Tink.TransactionsOneTimeAccess,
+        Tink.TransactionsContinuousAccess,
+        Tink.Accounts,
+        Tink.Users,
+        Tink.Categories,
+        Tink.Statistics
       ],
-
       "Verification & Insights": [
-        TinkEx.AccountCheck,
-        TinkEx.IncomeCheck,
-        TinkEx.ExpenseCheck,
-        TinkEx.RiskCategorisation,
-        TinkEx.RiskInsights,
-        TinkEx.BusinessAccountCheck,
-        TinkEx.BalanceCheck
+        Tink.AccountCheck,
+        Tink.IncomeCheck,
+        Tink.ExpenseCheck,
+        Tink.RiskCategorisation,
+        Tink.RiskInsights,
+        Tink.BusinessAccountCheck,
+        Tink.BalanceCheck
       ],
-
       "Finance Management": [
-        TinkEx.Budgets,
-        TinkEx.CashFlow,
-        TinkEx.FinancialCalendar
+        Tink.Budgets,
+        Tink.CashFlow,
+        Tink.FinancialCalendar
       ],
-
       "Investment & Loans": [
-        TinkEx.Investments,
-        TinkEx.Loans
+        Tink.Investments,
+        Tink.Loans
       ],
-
-      "Infrastructure": [
-        TinkEx.Providers,
-        TinkEx.Connectivity,
-        TinkEx.Link
+      Infrastructure: [
+        Tink.Providers,
+        Tink.Connectivity,
+        Tink.Link,
+        Tink.Connector
       ],
-
       "HTTP & Networking": [
-        TinkEx.HTTPBehaviour,
-        TinkEx.HTTPAdapter,
-        TinkEx.Retry
+        Tink.HTTPBehaviour,
+        Tink.HTTPAdapter,
+        Tink.Retry
       ],
-
-      "Utilities": [
-        TinkEx.RateLimiter,
-        TinkEx.Cache,
-        TinkEx.Helpers,
-        TinkEx.Connector
+      Webhooks: [
+        Tink.WebhookHandler,
+        Tink.WebhookVerifier
+      ],
+      Utilities: [
+        Tink.RateLimiter,
+        Tink.Cache,
+        Tink.Helpers
       ]
     ]
   end
@@ -245,7 +248,6 @@ defmodule TinkEx.MixProject do
       # Testing
       test: ["test"],
       "test.coverage": ["coveralls.html"],
-      "test.watch": ["test.watch"],
 
       # Documentation
       docs: ["docs"],
