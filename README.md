@@ -1,3 +1,6 @@
+<img width="2008" height="1000" alt="image" src="https://github.com/user-attachments/assets/ce3a4103-4ed2-4374-9340-f72e7937fac9" />
+
+
 # Tink
 
 [![Hex.pm](https://img.shields.io/hexpm/v/tink.svg)](https://hex.pm/packages/tink)
