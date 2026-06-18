@@ -24,8 +24,9 @@ defmodule Tink.MixProject do
         "coveralls.html": :test
       ],
       dialyzer: [
-        plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
-        flags: [:error_handling, :missing_return, :underspecs]
+      plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
+        plt_add_apps: [:mix],
+        flags: [:error_handling, :underspecs]
       ],
       name: "Tink",
       source_url: @source_url
