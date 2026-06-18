@@ -1,83 +1,21 @@
 # Caching
 
-Tink uses `Tink.Cache` (backed by Cachex) to reduce redundant API calls for
-data that changes infrequently — providers, categories, account metadata, and
-aggregated statistics.
+`Tink.ex` uses [Cachex](https://hex.pm/packages/cachex) (v4.1+) for transparent
+response caching. Caching is **on by default** and dramatically reduces API calls
+for slow-changing resources.
 
-## Requirements
-
-Caching requires the `:cachex` optional dependency:
-
-```elixir
-# mix.exs
-{:cachex, "~> 4.1"}
-```
-
-## Enabling the Cache
+## Configuration
 
 ```elixir
 # config/config.exs
 config :tink,
   cache: [
-    enabled:  true,
-    max_size: 1_000    # maximum number of cached entries
+    enabled:  true,     # Set to false to disable globally
+    max_size: 1_000     # Max number of entries in the cache
   ]
 ```
 
-## What Gets Cached
-
-| Module | Function | TTL |
-|---|---|---|
-| `Tink.Providers` | `list_providers/2`, `get_provider/2` | 1h / 2h |
-| `Tink.Categories` | `list_categories/2`, `get_category/3` | 24h |
-| `Tink.Accounts` | `list_accounts/2`, `get_account/2` | 5 min |
-| `Tink.Accounts` | `get_balances/2` | 1 min |
-| `Tink.Statistics` | all `get_*` functions | 1h |
-| `Tink.Investments` | `list_accounts/1`, `get_holdings/2` | 5 min |
-| `Tink.Loans` | `list_accounts/1`, `get_account/2` | 5 min |
-| `Tink.Budgets` | `get_budget/2`, `list_budgets/2` | 5 min |
-
-Write operations (e.g. `update_budget/3`) automatically invalidate the
-affected cache entries.
-
-## Cache Keys
-
-Keys follow the pattern `"user_id:resource:identifier"`. The cache is scoped
-per user — invalidating a user's cache only affects that user's entries:
-
-```elixir
-Tink.Cache.invalidate_user("user_123")
-```
-
-## Bypassing the Cache
-
-Pass `cache: false` on any client to skip caching for a specific call:
-
-```elixir
-client_no_cache = %{client | cache: false}
-{:ok, accounts} = Tink.Accounts.list(client_no_cache)
-```
-
-## Manual Cache Control
-
-```elixir
-# Check if cache is enabled
-Tink.Cache.enabled?()   # true | false
-
-# Store a value manually
-Tink.Cache.put("my_key", my_value, ttl: :timer.minutes(10))
-
-# Retrieve a value
-Tink.Cache.get("my_key")   # {:ok, value} | {:error, :not_found}
-
-# Delete a specific key
-Tink.Cache.delete("my_key")
-
-# Invalidate all entries for a user
-Tink.Cache.invalidate_user("user_123")
-```
-
-## Disabling in Tests
+## Disabling in tests
 
 ```elixir
 # config/test.exs
@@ -85,11 +23,77 @@ config :tink,
   cache: [enabled: false]
 ```
 
-## Cache Stats (Cachex)
+## Bypassing per-client
 
-Cachex exposes statistics when needed for debugging:
+Set `cache: false` on a client to skip caching for all calls on that client:
 
 ```elixir
-Cachex.stats(:tink_cache)
-# %{hits: 1234, misses: 56, evictions: 10, ...}
+client_no_cache = %{user_client | cache: false}
+{:ok, accounts} = Tink.Accounts.list(client_no_cache)
+```
+
+## TTLs by resource type
+
+| TTL key        | Duration   | Used for                              |
+|----------------|------------|---------------------------------------|
+| `:categories`  | 24 hours   | Enrichment PFM categories             |
+| `:providers`   | 2 hours    | Provider lists and details            |
+| `:statistics`  | 1 hour     | Statistics query results              |
+| `:default`     | 5 minutes  | Accounts, investments, loans, budgets |
+| `:balances`    | 1 minute   | Account balances                      |
+| `:credentials` | 30 seconds | Credential status                     |
+
+## Cache key pattern
+
+Keys follow `"token_prefix:resource:identifier"`:
+
+- `"abc12345:accounts:123"` — single account for a user
+- `"abc12345:budgets"` — budget list for a user
+- `"global:categories:en_US"` — categories (not user-scoped)
+- `"global:providers:GB"` — providers for a market
+
+The `token_prefix` is the first 12 characters of the access token. This scopes
+entries per user session without storing PII as cache keys.
+
+## Write invalidation
+
+All write operations automatically invalidate the relevant cache entries:
+
+```elixir
+# This invalidates both the individual account cache and the list cache
+{:ok, updated} = Tink.Accounts.update(client, account_id, %{"name" => "New name"})
+
+# Budget deletion invalidates both the specific budget and the list
+:ok = Tink.Budgets.delete(client, budget_id)
+```
+
+## Manual invalidation
+
+```elixir
+# Delete a specific key
+Tink.Cache.delete("abc12345:accounts:account-001")
+
+# Invalidate all entries for a user (e.g. after full refresh)
+Tink.Cache.invalidate_user("abc12345")
+
+# Invalidate by prefix
+Tink.Cache.invalidate_prefix("abc12345:budgets")
+
+# Check stats
+{:ok, stats} = Tink.Cache.stats()
+```
+
+## Telemetry
+
+Cache events:
+
+| Event | Metadata |
+|---|---|
+| `[:tink, :cache, :hit]` | `%{key: cache_key}` |
+| `[:tink, :cache, :miss]` | `%{key: cache_key}` |
+
+```elixir
+:telemetry.attach("tink-cache", [:tink, :cache, :miss], fn _event, _measurements, meta, _config ->
+  Logger.debug("Cache miss: #{meta.key}")
+end, nil)
 ```
