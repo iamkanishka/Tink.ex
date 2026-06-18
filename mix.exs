@@ -8,7 +8,7 @@ defmodule Tink.MixProject do
     [
       app: :tink,
       version: @version,
-      elixir: "~> 1.14",
+      elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
