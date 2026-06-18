@@ -1,93 +1,117 @@
 # Error Handling
 
-All Tink functions return `{:ok, result}` or `{:error, %Tink.Error{}}`.
-No exceptions are raised for API-level errors.
+All `Tink.ex` functions return `{:ok, map()}` or `{:error, %Tink.Error{}}`.
+Errors are never raised — the caller always pattern-matches the result.
 
-## The Error Struct
+## The `Tink.Error` struct
 
 ```elixir
 %Tink.Error{
-  status:  404,                      # HTTP status code
-  code:    "NOT_FOUND",              # Tink error code
-  message: "Resource not found",     # Human-readable description
-  request_id: "req_abc123"           # Tink request ID for support
+  status:     404,
+  code:       "NOT_FOUND",
+  message:    "Account not found",
+  request_id: "req-abc123",   # from X-Tink-Request-Id header — useful for Tink support
+  details:    %{...}          # raw response body
 }
 ```
 
-## Pattern Matching on Errors
+## Pattern matching
 
 ```elixir
-case Tink.Accounts.list(client) do
-  {:ok, accounts} ->
-    process(accounts)
+case Tink.Accounts.get(client, account_id) do
+  {:ok, account} ->
+    # happy path
+    IO.inspect(account["id"])
 
   {:error, %Tink.Error{status: 401}} ->
-    {:error, :unauthenticated}
-
-  {:error, %Tink.Error{status: 403}} ->
-    {:error, :forbidden}
+    # token expired — refresh and retry
+    {:ok, new_client} = Tink.Auth.refresh(client, refresh_token)
+    Tink.Accounts.get(new_client, account_id)
 
   {:error, %Tink.Error{status: 404}} ->
-    {:error, :not_found}
+    # resource not found — handle gracefully
+    nil
 
-  {:error, %Tink.Error{status: 429, message: msg}} ->
-    Logger.warning("Rate limited: #{msg}")
-    {:error, :rate_limited}
+  {:error, %Tink.Error{status: 429, request_id: rid}} ->
+    # rate limited — log and back off
+    Logger.warning("Rate limited, request_id=#{rid}")
+    :rate_limited
 
-  {:error, %Tink.Error{status: status}} when status >= 500 ->
-    {:error, :server_error}
+  {:error, %Tink.Error{status: nil, code: "NETWORK_ERROR"}} ->
+    # network failure — retry or fail gracefully
+    :unavailable
 
   {:error, %Tink.Error{} = err} ->
-    Logger.error("Unexpected error: #{inspect(err)}")
-    {:error, :unknown}
+    # catch-all
+    Logger.error(Exception.message(err))
+    {:error, err}
 end
 ```
 
-## Automatic Retries
+## Retryable vs non-retryable errors
 
-Tink retries transient failures (429, 503, network timeouts) automatically
-using exponential backoff with jitter. Configure via:
+The client automatically retries on `429` and `503` and network failures using
+full-jitter exponential backoff. These status codes are **never** retried:
+
+| Status | Meaning | Retry? |
+|--------|---------|--------|
+| 400 | Bad request | ✗ |
+| 401 | Unauthorized / token expired | ✗ |
+| 403 | Forbidden / missing scope | ✗ |
+| 404 | Resource not found | ✗ |
+| 422 | Unprocessable entity | ✗ |
+| 429 | Rate limited | ✓ (up to `max_retries`) |
+| 503 | Service unavailable | ✓ |
+| `nil` | Network error | ✓ |
+
+## Retry configuration
 
 ```elixir
 config :tink,
-  max_retries: 3,
-  retry_delay: 500    # base delay in ms
+  max_retries: 3,     # default 3 — set to 0 to disable
+  retry_delay: 500    # base delay ms; actual delay is jittered exponentially
 ```
 
-Retry behaviour is handled by `Tink.Retry`. Calls that succeed on a retry
-return `{:ok, result}` transparently — retries are invisible to the caller.
-
-## Non-Retryable Errors
-
-The following are never retried:
-
-- `400 Bad Request` — fix the request parameters
-- `401 Unauthorized` — refresh the token
-- `403 Forbidden` — check scopes
-- `404 Not Found` — the resource does not exist
-- `422 Unprocessable Entity` — semantic validation error
-
-## Logging Request IDs
-
-Always log the `request_id` when reporting errors to Tink support:
+Per-call override:
 
 ```elixir
-case Tink.Transactions.list(client, account_id: id) do
-  {:error, %Tink.Error{request_id: rid} = err} ->
-    Logger.error("Tink error [request_id=#{rid}]: #{err.message}")
-    {:error, :api_error}
+Tink.Accounts.list(client, max_retries: 0)  # disable retry for this call
+```
 
-  {:ok, _} = ok -> ok
+## Timeout errors
+
+Timeouts surface as `%Tink.Error{status: nil, code: "NETWORK_ERROR"}`.
+Configure the timeout:
+
+```elixir
+config :tink, timeout: 30_000   # ms, default 30s
+```
+
+## Polling timeouts
+
+Polling helpers (`poll_until_terminal`, `poll_until_complete`, `poll_operation`)
+return `{:error, :timeout}` — an atom, not a `%Tink.Error{}` — when the deadline
+is exceeded:
+
+```elixir
+case Tink.Payments.poll_until_terminal(client, payment_id, timeout_ms: 30_000) do
+  {:ok, %{"status" => "SUCCESSFUL"}} -> :paid
+  {:ok, %{"status" => "FAILED"}}     -> :failed
+  {:error, :timeout}                 -> :timed_out
+  {:error, %Tink.Error{} = err}      -> {:error, err}
 end
 ```
 
-## Error Codes Reference
+## Request IDs for support
 
-| Code | Status | Meaning |
-|---|---|---|
-| `INVALID_TOKEN` | 401 | Access token is expired or invalid |
-| `INSUFFICIENT_SCOPE` | 403 | Token lacks required scope |
-| `NOT_FOUND` | 404 | Resource does not exist |
-| `RATE_LIMITED` | 429 | Too many requests |
-| `TEMPORARY_UNAVAILABLE` | 503 | Tink or bank is temporarily down |
-| `PROVIDER_ERROR` | 502 | The connected bank returned an error |
+Every API error includes a `request_id` (from the `X-Tink-Request-Id` response
+header). Always log this when reporting issues to Tink support:
+
+```elixir
+case result do
+  {:error, %Tink.Error{request_id: rid} = err} when not is_nil(rid) ->
+    Logger.error("Tink API error. request_id=#{rid} — #{Exception.message(err)}")
+  {:error, err} ->
+    Logger.error("Tink API error: #{inspect(err)}")
+end
+```
