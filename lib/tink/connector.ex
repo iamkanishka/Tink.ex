@@ -1,495 +1,170 @@
 defmodule Tink.Connector do
   @moduledoc """
-  Connector API for ingesting accounts and transactions directly.
+  Connector API — manual account and transaction ingestion.
 
-  The Connector API allows you to bypass bank connections and directly ingest
-  account and transaction data into Tink. This is useful for:
+  Use this when you already hold bank data and want to push it into Tink's
+  enrichment pipeline without using Tink Link aggregation.
 
-  - Testing and development
-  - Custom data sources
-  - Legacy system integration
-  - Mock data scenarios
+  Requires `accounts:write` and `transactions:write` scopes on an
+  application-level (client credentials) client.
 
-  ## Features
+  ## Example
 
-  - Create users programmatically
-  - Ingest accounts with balance information
-  - Ingest transactions in bulk
-  - Real-time and batch transaction updates
-  - Support for pending transactions
+      {:ok, client} = Tink.Auth.client_credentials(scope: "accounts:write transactions:write")
 
-  ## Prerequisites
+      Tink.Connector.upsert_accounts(client, "ext-user-123", [
+        %{
+          "externalId" => "acc-001",
+          "name"       => "Current Account",
+          "type"       => "CHECKING",
+          "balance"    => %{"amount" => %{"currencyCode" => "GBP", "value" => 1500.0}}
+        }
+      ])
 
-  To use the Connector API, ensure you have:
-  - Client credentials with appropriate scopes
-  - User creation permissions
+      {:ok, op} = Tink.Connector.upsert_transactions(client, "ext-user-123", [
+        %{
+          "externalId"        => "tx-001",
+          "accountExternalId" => "acc-001",
+          "description"       => "Spotify",
+          "amount"            => %{"currencyCode" => "GBP", "value" => -9.99},
+          "dates"             => %{"booked" => "2024-01-15"}
+        }
+      ])
 
-  ## Flow
+      # Poll the async ingestion operation
+      {:ok, _} = Tink.Connector.poll_operation(client, op["operationId"])
 
-      # Step 1: Get access token with required scopes
-      client = Tink.client(
-        scope: "user:create,user:read,transactions:write,transactions:read,accounts:write,accounts:read"
+  """
+
+  alias Tink.{Client, Error, Utils}
+
+  # ── User ─────────────────────────────────────────────────────────────────────
+
+  @doc "Delete all data for a connector user. Requires `accounts:write`."
+  @spec delete_user(Client.t(), String.t()) :: :ok | {:error, Error.t()}
+  def delete_user(%Client{} = client, external_user_id) when is_binary(external_user_id) do
+    case Client.delete(client, "/connector/users/#{external_user_id}") do
+      {:ok, _} -> :ok
+      {:error, _} = err -> err
+    end
+  end
+
+  # ── Accounts ─────────────────────────────────────────────────────────────────
+
+  @doc "Upsert a batch of accounts for a user (v1). Requires `accounts:write`."
+  @spec upsert_accounts(Client.t(), String.t(), list(map())) ::
+          {:ok, map()} | {:error, Error.t()}
+  def upsert_accounts(%Client{} = client, external_user_id, accounts)
+      when is_binary(external_user_id) and is_list(accounts) do
+    Client.post(client, "/connector/users/#{external_user_id}/accounts", %{"accounts" => accounts})
+  end
+
+  @doc "Upsert a single account by external ID (v1). Requires `accounts:write`."
+  @spec upsert_account(Client.t(), String.t(), String.t(), map()) ::
+          {:ok, map()} | {:error, Error.t()}
+  def upsert_account(%Client{} = client, external_user_id, external_account_id, %{} = params)
+      when is_binary(external_user_id) and is_binary(external_account_id) do
+    Client.put(
+      client,
+      "/connector/users/#{external_user_id}/accounts/#{external_account_id}",
+      params
+    )
+  end
+
+  @doc "Upsert accounts via v2 connector API. Requires `accounts:write`."
+  @spec upsert_accounts_v2(Client.t(), list(map())) :: {:ok, map()} | {:error, Error.t()}
+  def upsert_accounts_v2(%Client{} = client, accounts) when is_list(accounts) do
+    Client.post(client, "/data/v2/connector/accounts", %{"accounts" => accounts})
+  end
+
+  @doc "Delete accounts by external ID via v2 connector API. Requires `accounts:write`."
+  @spec delete_accounts(Client.t(), list(String.t())) :: {:ok, map()} | {:error, Error.t()}
+  def delete_accounts(%Client{} = client, external_ids) when is_list(external_ids) do
+    Client.post(client, "/data/v2/connector/accounts:delete", %{"externalIds" => external_ids})
+  end
+
+  # ── Transactions ──────────────────────────────────────────────────────────────
+
+  @doc "Upsert a batch of transactions for a user (v1). Requires `transactions:write`."
+  @spec upsert_transactions(Client.t(), String.t(), list(map())) ::
+          {:ok, map()} | {:error, Error.t()}
+  def upsert_transactions(%Client{} = client, external_user_id, transactions)
+      when is_binary(external_user_id) and is_list(transactions) do
+    Client.post(client, "/connector/users/#{external_user_id}/transactions", %{
+      "transactions" => transactions
+    })
+  end
+
+  @doc "Upsert a single transaction by external ID (v1). Requires `transactions:write`."
+  @spec upsert_transaction(Client.t(), String.t(), String.t(), map()) ::
+          {:ok, map()} | {:error, Error.t()}
+  def upsert_transaction(%Client{} = client, external_user_id, external_tx_id, %{} = params)
+      when is_binary(external_user_id) and is_binary(external_tx_id) do
+    Client.put(
+      client,
+      "/connector/users/#{external_user_id}/transactions/#{external_tx_id}",
+      params
+    )
+  end
+
+  @doc "Delete transactions for a user by external ID list (v1). Requires `transactions:write`."
+  @spec delete_transactions(Client.t(), String.t(), list(String.t())) ::
+          {:ok, map()} | {:error, Error.t()}
+  def delete_transactions(%Client{} = client, external_user_id, external_ids)
+      when is_binary(external_user_id) and is_list(external_ids) do
+    Client.post(client, "/connector/users/#{external_user_id}/transactions/delete", %{
+      "externalIds" => external_ids
+    })
+  end
+
+  @doc "Upsert transactions via v2 connector API. Requires `transactions:write`."
+  @spec upsert_transactions_v2(Client.t(), list(map())) :: {:ok, map()} | {:error, Error.t()}
+  def upsert_transactions_v2(%Client{} = client, transactions) when is_list(transactions) do
+    Client.post(client, "/data/v2/connector/transactions", %{"transactions" => transactions})
+  end
+
+  @doc "Batch delete transactions via v2 connector API. Requires `transactions:write`."
+  @spec batch_delete_transactions(Client.t(), list(String.t())) ::
+          {:ok, map()} | {:error, Error.t()}
+  def batch_delete_transactions(%Client{} = client, external_ids) when is_list(external_ids) do
+    Client.post(client, "/data/v2/connector/transactions:batchDelete", %{
+      "externalIds" => external_ids
+    })
+  end
+
+  @doc "Batch update transactions via v2 connector API. Requires `transactions:write`."
+  @spec batch_update_transactions(Client.t(), list(map())) :: {:ok, map()} | {:error, Error.t()}
+  def batch_update_transactions(%Client{} = client, transactions) when is_list(transactions) do
+    Client.post(client, "/data/v2/connector/transactions:batchUpdate", %{
+      "transactions" => transactions
+    })
+  end
+
+  # ── Operations ────────────────────────────────────────────────────────────────
+
+  @doc "Get the status of an async connector operation. Requires `transactions:write`."
+  @spec get_operation(Client.t(), String.t()) :: {:ok, map()} | {:error, Error.t()}
+  def get_operation(%Client{} = client, operation_id) when is_binary(operation_id) do
+    Client.get(client, "/data/v2/connector/operations/#{operation_id}")
+  end
+
+  @doc """
+  Poll a connector operation until it completes or times out.
+
+  ## Options
+  - `:timeout_ms` — default 30_000
+  - `:interval_ms` — default 1_000
+  """
+  @spec poll_operation(Client.t(), String.t(), keyword()) ::
+          {:ok, map()} | {:error, Error.t() | :timeout}
+  def poll_operation(%Client{} = client, operation_id, opts \\ []) when is_binary(operation_id) do
+    Utils.poll_until(
+      fn -> get_operation(client, operation_id) end,
+      ["COMPLETED"],
+      Keyword.merge(
+        [timeout_ms: 30_000, interval_ms: 1_000, failed_statuses: ["FAILED", "REJECTED"]],
+        opts
       )
-
-      # Step 2: Create user
-      {:ok, user} = Tink.Connector.create_user(client, %{
-        external_user_id: "test-user-1",
-        market: "GB",
-        locale: "en_US"
-      })
-
-      # Step 3: Ingest accounts
-      {:ok, accounts} = Tink.Connector.ingest_accounts(client, "test-user-1", %{
-        accounts: [
-          %{
-            external_id: "checking-001",
-            name: "Checking Account",
-            type: "CHECKING",
-            balance: 15000.50,
-            number: "1234567890"
-          }
-        ]
-      })
-
-      # Step 4: Ingest transactions
-      {:ok, result} = Tink.Connector.ingest_transactions(client, "test-user-1", %{
-        type: "REAL_TIME",
-        transaction_accounts: [
-          %{
-            external_id: "checking-001",
-            balance: 15000.50,
-            transactions: [
-              %{
-                external_id: "txn-001",
-                amount: -45.50,
-                date: System.system_time(:millisecond),
-                description: "Grocery Store",
-                type: "DEFAULT",
-                pending: false
-              }
-            ]
-          }
-        ]
-      })
-
-  ## Use Cases
-
-  ### Testing Financial Products
-
-      @spec setup_test_user_with_data() :: {:ok, map()} | {:error, Error.t()}
-
-      def setup_test_user_with_data do
-        client = Tink.client(scope: connector_scopes())
-
-        {:ok, user} = Tink.Connector.create_user(client, %{
-          external_user_id: "test-user-\#{:rand.uniform(10000)}",
-          market: "GB",
-          locale: "en_US"
-        })
-
-        {:ok, _} = Tink.Connector.ingest_accounts(client, user["external_user_id"], %{
-          accounts: test_accounts()
-        })
-
-        {:ok, _} = Tink.Connector.ingest_transactions(
-          client,
-          user["external_user_id"],
-          %{type: "REAL_TIME", transaction_accounts: test_transactions()}
-        )
-
-        user
-      end
-
-  ### Legacy System Integration
-
-      @spec sync_from_legacy_system(String.t()) :: {:ok, map()} | {:error, Error.t()}
-
-      def sync_from_legacy_system(external_user_id) do
-        client = Tink.client(scope: connector_scopes())
-
-        legacy_accounts = LegacyDB.get_accounts(external_user_id)
-        legacy_transactions = LegacyDB.get_transactions(external_user_id)
-
-        accounts = transform_accounts(legacy_accounts)
-        {:ok, _} = Tink.Connector.ingest_accounts(client, external_user_id, accounts)
-
-        transactions = transform_transactions(legacy_transactions)
-        {:ok, _} = Tink.Connector.ingest_transactions(client, external_user_id, transactions)
-
-        :ok
-      end
-
-  ### Mock Data for Demos
-
-      @spec create_demo_user_with_scenario(atom()) :: {:ok, map()} | {:error, Error.t()}
-
-      def create_demo_user_with_scenario(scenario_type) when is_atom(scenario_type) do
-        client = Tink.client(scope: connector_scopes())
-
-        scenario_str = Atom.to_string(scenario_type)
-
-        {:ok, user} = Tink.Connector.create_user(client, %{
-          external_user_id: "demo-\#{scenario_str}",
-          market: "GB",
-          locale: "en_US"
-        })
-
-        case scenario_type do
-          :high_saver   -> setup_high_saver_scenario(client, user["external_user_id"])
-          :overspender  -> setup_overspender_scenario(client, user["external_user_id"])
-          :stable_income -> setup_stable_income_scenario(client, user["external_user_id"])
-        end
-
-        user
-      end
-
-  ## Required Scopes
-
-  - `user:create` - Create users
-  - `user:read` - Read user data
-  - `accounts:write` - Ingest accounts
-  - `accounts:read` - Read accounts
-  - `transactions:write` - Ingest transactions
-  - `transactions:read` - Read transactions
-
-  ## Links
-
-  - [Connector API Documentation](https://docs.tink.com/api/connector)
-  - [Testing Guide](https://docs.tink.com/resources/testing)
-  """
-
-  alias Tink.{Client, Error}
-
-  # ---------------------------------------------------------------------------
-  # User Management
-  # ---------------------------------------------------------------------------
-
-  @doc """
-  Creates a new user via the Connector API.
-
-  ## Parameters
-
-    * `client` - Tink client with `user:create` scope
-    * `params` - User parameters:
-      * `:external_user_id` - Your unique user identifier (required)
-      * `:market` - Market code (e.g., "GB", "SE") (required)
-      * `:locale` - Locale code (e.g., "en_US", "sv_SE") (required)
-
-  ## Returns
-
-    * `{:ok, user}` - Created user with `user_id`
-    * `{:error, error}` - If the request fails
-
-  ## Examples
-
-      client = Tink.client(scope: "user:create")
-
-      {:ok, user} = Tink.Connector.create_user(client, %{
-        external_user_id: "test-user-1",
-        market: "GB",
-        locale: "en_US"
-      })
-      #=> {:ok, %{
-      #     "user_id" => "tink_user_abc123",
-      #     "external_user_id" => "test-user-1",
-      #     "market" => "GB",
-      #     "locale" => "en_US"
-      #   }}
-
-  ## Required Scope
-
-  `user:create`
-  """
-  @spec create_user(Client.t(), map()) :: {:ok, map()} | {:error, Error.t()}
-  def create_user(%Client{} = client, params) when is_map(params) do
-    url = "/api/v1/user/create"
-
-    body = %{
-      "external_user_id" => Map.fetch!(params, :external_user_id),
-      "market" => Map.fetch!(params, :market),
-      "locale" => Map.fetch!(params, :locale)
-    }
-
-    Client.post(client, url, body)
+    )
   end
-
-  # ---------------------------------------------------------------------------
-  # Account Ingestion
-  # ---------------------------------------------------------------------------
-
-  @doc """
-  Ingests accounts for a user.
-
-  Creates or updates accounts with balance and metadata.
-
-  ## Parameters
-
-    * `client` - Tink client with `accounts:write` scope
-    * `external_user_id` - External user ID
-    * `params` - Account data:
-      * `:accounts` - List of accounts (required)
-
-  Each account should contain:
-  - `:external_id` - Unique account identifier (required)
-  - `:name` - Account name (required)
-  - `:type` - Account type (required)
-  - `:balance` - Current balance (required)
-  - `:number` - Account number (optional)
-  - `:available_credit` - Available credit (optional)
-  - `:reserved_amount` - Reserved/pending amount (optional)
-  - `:closed` - Whether account is closed (optional, default: false)
-  - `:flags` - Account flags (optional)
-  - `:exclusion` - Exclusion settings (optional)
-  - `:payload` - Custom metadata (optional)
-
-  ## Returns
-
-    * `{:ok, result}` - Ingestion result
-    * `{:error, error}` - If the request fails
-
-  ## Examples
-
-      client = Tink.client(scope: "accounts:write")
-
-      {:ok, result} = Tink.Connector.ingest_accounts(client, "test-user-1", %{
-        accounts: [
-          %{
-            external_id: "checking-001",
-            name: "Main Checking",
-            type: "CHECKING",
-            balance: 15000.50,
-            number: "1234567890",
-            available_credit: 0.0,
-            reserved_amount: 100.0,
-            closed: false,
-            flags: [],
-            exclusion: "NONE",
-            payload: %{}
-          },
-          %{
-            external_id: "savings-001",
-            name: "Savings Account",
-            type: "SAVINGS",
-            balance: 50000.0,
-            number: "9876543210",
-            closed: false
-          },
-          %{
-            external_id: "credit-001",
-            name: "Credit Card",
-            type: "CREDIT_CARD",
-            balance: -2500.0,
-            available_credit: 20000.0,
-            number: "4111111111111111"
-          }
-        ]
-      })
-
-  ## Account Types
-
-  - `CHECKING` - Checking/current account
-  - `SAVINGS` - Savings account
-  - `CREDIT_CARD` - Credit card
-  - `LOAN` - Loan account
-  - `PENSION` - Pension/retirement
-  - `INVESTMENT` - Investment account
-  - `MORTGAGE` - Mortgage
-  - `OTHER` - Other account type
-
-  ## Flags
-
-  - `MANDATE` - Account has mandate
-  - `BUSINESS` - Business account
-  - `EXTERNAL` - External account
-
-  ## Exclusion
-
-  - `NONE` - Include in all features
-  - `PFM` - Exclude from PFM
-  - `SEARCH` - Exclude from search
-  - `PFM_AND_SEARCH` - Exclude from both
-
-  ## Required Scope
-
-  `accounts:write`
-  """
-  @spec ingest_accounts(Client.t(), String.t(), map()) ::
-          {:ok, map()} | {:error, Error.t()}
-  def ingest_accounts(%Client{} = client, external_user_id, params)
-      when is_binary(external_user_id) and is_map(params) do
-    url = "/connector/users/#{external_user_id}/accounts"
-
-    body = %{
-      "accounts" => Enum.map(Map.fetch!(params, :accounts), &format_account/1)
-    }
-
-    Client.post(client, url, body)
-  end
-
-  # ---------------------------------------------------------------------------
-  # Transaction Ingestion
-  # ---------------------------------------------------------------------------
-
-  @doc """
-  Ingests transactions for a user.
-
-  Creates or updates transactions with real-time or batch processing.
-
-  ## Parameters
-
-    * `client` - Tink client with `transactions:write` scope
-    * `external_user_id` - External user ID
-    * `params` - Transaction data:
-      * `:type` - Update type: "REAL_TIME" or "BATCH" (required)
-      * `:transaction_accounts` - List of accounts with transactions (required)
-      * `:auto_book` - Auto-book pending transactions (optional, default: false)
-      * `:override_pending` - Override pending transactions (optional, default: false)
-
-  Each transaction_account should contain:
-  - `:external_id` - Account external ID (required)
-  - `:balance` - Updated account balance (required)
-  - `:reserved_amount` - Reserved amount (optional)
-  - `:transactions` - List of transactions (required)
-
-  Each transaction should contain:
-  - `:external_id` - Unique transaction ID (required)
-  - `:amount` - Transaction amount (negative for expenses) (required)
-  - `:date` - Transaction timestamp in milliseconds (required)
-  - `:description` - Transaction description (required)
-  - `:type` - Transaction type (required)
-  - `:pending` - Whether transaction is pending (optional, default: false)
-  - `:payload` - Custom metadata (optional)
-
-  ## Returns
-
-    * `{:ok, result}` - Ingestion result
-    * `{:error, error}` - If the request fails
-
-  ## Examples
-
-      client = Tink.client(scope: "transactions:write")
-
-      # Real-time transaction ingestion
-      {:ok, result} = Tink.Connector.ingest_transactions(client, "test-user-1", %{
-        type: "REAL_TIME",
-        auto_book: false,
-        override_pending: false,
-        transaction_accounts: [
-          %{
-            external_id: "checking-001",
-            balance: 14955.0,
-            reserved_amount: 0.0,
-            transactions: [
-              %{
-                external_id: "txn-\#{System.unique_integer([:positive])}",
-                amount: -45.50,
-                date: System.system_time(:millisecond),
-                description: "Coffee Shop",
-                type: "DEFAULT",
-                pending: false,
-                payload: %{merchant: "Starbucks"}
-              }
-            ]
-          }
-        ]
-      })
-
-      # Batch transaction ingestion
-      {:ok, result} = Tink.Connector.ingest_transactions(client, "test-user-1", %{
-        type: "BATCH",
-        transaction_accounts: [
-          %{
-            external_id: "checking-001",
-            balance: 15000.0,
-            transactions: generate_month_of_transactions()
-          }
-        ]
-      })
-
-  ## Transaction Types
-
-  - `DEFAULT` - Standard transaction
-  - `CREDIT_CARD` - Credit card transaction
-  - `TRANSFER` - Transfer between accounts
-  - `PAYMENT` - Payment transaction
-  - `WITHDRAWAL` - Cash withdrawal
-  - `DEPOSIT` - Deposit
-
-  ## Update Types
-
-  ### REAL_TIME
-  - Immediate processing
-  - Updates balances in real-time
-  - Use for live transaction feeds
-
-  ### BATCH
-  - Bulk processing
-  - Efficient for large datasets
-  - Use for historical data import
-
-  ## Required Scope
-
-  `transactions:write`
-  """
-  @spec ingest_transactions(Client.t(), String.t(), map()) ::
-          {:ok, map()} | {:error, Error.t()}
-  def ingest_transactions(%Client{} = client, external_user_id, params)
-      when is_binary(external_user_id) and is_map(params) do
-    url = "/connector/users/#{external_user_id}/transactions"
-
-    body =
-      %{
-        "type" => Map.fetch!(params, :type),
-        "transactionAccounts" => Enum.map(Map.fetch!(params, :transaction_accounts), &format_transaction_account/1)
-      }
-      |> maybe_add_field("autoBook", params[:auto_book])
-      |> maybe_add_field("overridePending", params[:override_pending])
-
-    Client.post(client, url, body)
-  end
-
-  # ---------------------------------------------------------------------------
-  # Private Helper Functions
-  # ---------------------------------------------------------------------------
-
-  defp format_account(account) do
-    %{
-      "externalId" => Map.fetch!(account, :external_id),
-      "name" => Map.fetch!(account, :name),
-      "type" => Map.fetch!(account, :type),
-      "balance" => Map.fetch!(account, :balance)
-    }
-    |> maybe_add_field("number", account[:number])
-    |> maybe_add_field("availableCredit", account[:available_credit])
-    |> maybe_add_field("reservedAmount", account[:reserved_amount])
-    |> maybe_add_field("closed", account[:closed])
-    |> maybe_add_field("flags", account[:flags])
-    |> maybe_add_field("exclusion", account[:exclusion])
-    |> maybe_add_field("payload", account[:payload])
-  end
-
-  defp format_transaction_account(account) do
-    %{
-      "externalId" => Map.fetch!(account, :external_id),
-      "balance" => Map.fetch!(account, :balance),
-      "transactions" => Enum.map(Map.fetch!(account, :transactions), &format_transaction/1)
-    }
-    |> maybe_add_field("reservedAmount", account[:reserved_amount])
-    |> maybe_add_field("payload", account[:payload])
-  end
-
-  defp format_transaction(transaction) do
-    %{
-      "externalId" => Map.fetch!(transaction, :external_id),
-      "amount" => Map.fetch!(transaction, :amount),
-      "date" => Map.fetch!(transaction, :date),
-      "description" => Map.fetch!(transaction, :description),
-      "type" => Map.fetch!(transaction, :type)
-    }
-    |> maybe_add_field("pending", transaction[:pending])
-    |> maybe_add_field("payload", transaction[:payload])
-  end
-
-  defp maybe_add_field(map, _key, nil), do: map
-  defp maybe_add_field(map, key, value), do: Map.put(map, key, value)
 end
