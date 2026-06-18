@@ -1,266 +1,194 @@
 defmodule Tink.MixProject do
   use Mix.Project
 
-  @version "0.1.1"
+  @version "1.0.0"
   @source_url "https://github.com/iamkanishka/tink.ex"
 
   def project do
     [
       app: :tink,
       version: @version,
-      elixir: "~> 1.18",
+      elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
+      elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
       description: description(),
       package: package(),
       docs: docs(),
-      name: "Tink",
-      source_url: @source_url,
-      homepage_url: @source_url,
-
-      # Test coverage
+      aliases: aliases(),
       test_coverage: [tool: ExCoveralls],
       preferred_cli_env: [
         coveralls: :test,
         "coveralls.detail": :test,
         "coveralls.post": :test,
-        "coveralls.html": :test,
-        "coveralls.json": :test
+        "coveralls.html": :test
       ],
-
-      # Dialyzer configuration
       dialyzer: [
         plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
-        plt_add_apps: [:ex_unit, :mix],
-        ignore_warnings: ".dialyzer_ignore.exs",
-        flags: [:error_handling, :underspecs]
+        flags: [:error_handling, :missing_return, :underspecs]
       ],
-
-      # Aliases
-      aliases: aliases()
+      name: "Tink",
+      source_url: @source_url
     ]
   end
 
+  # `test/support` contains shared test helpers/fixtures (`Tink.TestHelpers`)
+  # used across the suite. Without this, `mix test` fails to compile with
+  # "module Tink.TestHelpers is not loaded and could not be found".
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
+
   def application do
     [
-      extra_applications: [:logger, :crypto, :ssl, :public_key],
+      extra_applications: [:logger, :crypto, :public_key],
       mod: {Tink.Application, []}
     ]
   end
 
   defp deps do
     [
-      # HTTP client
-      {:finch, "~> 0.21"},
+      # HTTP
+      {:finch, "~> 0.16"},
       {:jason, "~> 1.4"},
-      {:mint, "~> 1.7"},
 
-      # OAuth & JWT
-      {:oauth2, "~> 2.1", optional: true},
-      {:joken, "~> 2.6", optional: true},
+      # Caching — guide specifies 4.1
+      {:cachex, "~> 4.1"},
 
-      # Financial calculations
-      {:decimal, "~> 2.3"},
+      # Rate limiting
+      {:hammer, "~> 6.2"},
 
-      # Utilities
-      {:telemetry, "~> 1.3"},
-      {:nimble_options, "~> 1.1"},
+      # Telemetry
+      {:telemetry, "~> 1.2"},
 
-      # Caching & Rate Limiting (Optional)
-      {:cachex, "~> 4.1", optional: true},
-      {:hammer, "~> 7.2", optional: true},
+      # Optional — only needed if you use Tink.WebhookVerifier.verify_plug/2.
+      # Core webhook verification (verify/2, verify_with_config/2) has no
+      # dependency on Plug.
+      {:plug, "~> 1.14", optional: true},
 
-      # Development & Documentation
-      {:ex_doc, "~> 0.40", only: :dev, runtime: false},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:excoveralls, "~> 0.18", only: :test, runtime: false},
-
-      # Testing
-      {:mox, "~> 1.2", only: :test},
+      # Dev/Test
       {:bypass, "~> 2.1", only: :test},
-      {:stream_data, "~> 1.1", only: :test}
+      {:excoveralls, "~> 0.18", only: :test},
+      {:mox, "~> 1.1", only: :test},
+      {:ex_doc, "~> 0.40.3", only: :dev, runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]
   end
 
   defp description do
-    """
-    Production-ready Elixir client for the Tink open banking API. Provides
-    comprehensive access to account aggregation, transaction data, financial
-    insights, account verification, income verification, and payment initiation
-    services.
-    """
+    "A complete, production-grade Elixir client for the Tink Open Banking API. " <>
+      "Covers all Tink products: data aggregation, enrichment, payments, VRP, " <>
+      "risk insights, income/expense checks, savings goals, PFM, and more."
   end
 
   defp package do
     [
       name: "tink",
-      files: ~w(
-        lib
-        .formatter.exs
-        mix.exs
-        README.md
-        LICENSE.txt
-        CHANGELOG.md
-      ),
-      licenses: ["MIT"],
+      licenses: ["Apache-2.0"],
       links: %{
         "GitHub" => @source_url,
-        "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md",
-        "Documentation" => "https://hexdocs.pm/tink"
+        "Tink Docs" => "https://docs.tink.com"
       },
-      maintainers: ["Kanishka"]
+      maintainers: ["Kanishka Naik"]
     ]
   end
 
   defp docs do
     [
       main: "readme",
-      name: "Tink",
       source_ref: "v#{@version}",
-      canonical: "https://hexdocs.pm/tink",
       source_url: @source_url,
-      extras: extras(),
-      groups_for_extras: groups_for_extras(),
-      groups_for_modules: groups_for_modules(),
-      groups_for_docs: [
-        "API Resources": &(&1[:section] == :api),
-        Configuration: &(&1[:section] == :config),
-        Utilities: &(&1[:section] == :util)
-      ]
-    ]
-  end
-
-  defp extras do
-    [
-      # Main documentation
-      "README.md",
-      "CHANGELOG.md",
-      "LICENSE.txt",
-
-      # Guides
-      "guides/getting-started.md",
-      "guides/authentication.md",
-      "guides/configuration.md",
-
-      # Product guides
-      "guides/products/account-check.md",
-      "guides/products/balance-check.md",
-      "guides/products/business-account-check.md",
-      "guides/products/transactions.md",
-      "guides/products/income-check.md",
-      "guides/products/expense-check.md",
-      "guides/products/risk-insights.md",
-      "guides/products/investments.md",
-      "guides/products/loans.md",
-      "guides/products/budgets.md",
-
-      # Advanced guides
-      "guides/advanced/error-handling.md",
-      "guides/advanced/testing.md",
-      "guides/advanced/rate-limiting.md",
-      "guides/advanced/caching.md",
-      "guides/advanced/telemetry.md",
-      "guides/advanced/webhooks.md"
-    ]
-  end
-
-  defp groups_for_extras do
-    [
-      "Getting Started": ~r/guides\/(getting-started|authentication|configuration)/,
-      Products: ~r/guides\/products/,
-      Advanced: ~r/guides\/advanced/
-    ]
-  end
-
-  defp groups_for_modules do
-    [
-      Core: [
-        Tink,
-        Tink.Client,
-        Tink.Config,
-        Tink.Auth,
-        Tink.AuthToken,
-        Tink.Error
+      extras: [
+        "README.md",
+        "CHANGELOG.md",
+        "guides/advanced/authentication.md",
+        "guides/advanced/caching.md",
+        "guides/advanced/error-handling.md",
+        "guides/advanced/rate-limiting.md",
+        "LICENSE"
       ],
-      "Account Aggregation": [
-        Tink.Transactions,
-        Tink.TransactionsOneTimeAccess,
-        Tink.TransactionsContinuousAccess,
-        Tink.Accounts,
-        Tink.Users,
-        Tink.Categories,
-        Tink.Statistics
-      ],
-      "Verification & Insights": [
-        Tink.AccountCheck,
-        Tink.IncomeCheck,
-        Tink.ExpenseCheck,
-        Tink.RiskCategorisation,
-        Tink.RiskInsights,
-        Tink.BusinessAccountCheck,
-        Tink.BalanceCheck
-      ],
-      "Finance Management": [
-        Tink.Budgets,
-        Tink.CashFlow,
-        Tink.FinancialCalendar
-      ],
-      "Investment & Loans": [
-        Tink.Investments,
-        Tink.Loans
-      ],
-      Infrastructure: [
-        Tink.Providers,
-        Tink.Connectivity,
-        Tink.Link,
-        Tink.Connector
-      ],
-      "HTTP & Networking": [
-        Tink.HTTPBehaviour,
-        Tink.HTTPAdapter,
-        Tink.Retry
-      ],
-      Webhooks: [
-        Tink.WebhookHandler,
-        Tink.WebhookVerifier
-      ],
-      Utilities: [
-        Tink.RateLimiter,
-        Tink.Cache,
-        Tink.Helpers
+      groups_for_modules: [
+        Core: [Tink, Tink.Client, Tink.Config, Tink.Error],
+        Auth: [Tink.Auth, Tink.AuthToken],
+        "Data Aggregation": [
+          Tink.Users,
+          Tink.Accounts,
+          Tink.Transactions,
+          Tink.Credentials,
+          Tink.Providers,
+          Tink.Identities,
+          Tink.Investments,
+          Tink.Loans,
+          Tink.Statistics,
+          Tink.FinancialCalendar
+        ],
+        Enrichment: [
+          Tink.Enrichment,
+          Tink.Enrichment.Transactions,
+          Tink.Enrichment.Recurring,
+          Tink.Enrichment.Categories,
+          Tink.Enrichment.Merchants,
+          Tink.Enrichment.Sustainability,
+          Tink.Enrichment.OnDemand
+        ],
+        "Verification & Risk": [
+          Tink.AccountCheck,
+          Tink.BusinessAccountCheck,
+          Tink.IncomeCheck,
+          Tink.ExpenseCheck,
+          Tink.RiskInsights,
+          Tink.BalanceCheck
+        ],
+        Payments: [
+          Tink.Payments,
+          Tink.MandatePayments,
+          Tink.Mandates,
+          Tink.BulkPayments,
+          Tink.SettlementAccounts
+        ],
+        "Finance Management": [
+          Tink.Budgets,
+          Tink.SavingsGoals,
+          Tink.Subscriptions,
+          Tink.CostOfLiving,
+          Tink.Insights,
+          Tink.CashFlow
+        ],
+        "Connectivity & Consents": [
+          Tink.Connectivity,
+          Tink.Consents,
+          Tink.ProviderConsents,
+          Tink.BalanceCheck
+        ],
+        Infrastructure: [
+          Tink.Connector,
+          Tink.Webhooks,
+          Tink.WebhookHandler,
+          Tink.WebhookVerifier,
+          Tink.Link,
+          Tink.ReportJobs,
+          Tink.Merchants,
+          Tink.TransactionReports
+        ],
+        Internal: [
+          Tink.HTTP,
+          Tink.HTTP.Finch,
+          Tink.HTTP.MutualTLS,
+          Tink.HTTP.Behaviour,
+          Tink.Cache,
+          Tink.RateLimiter,
+          Tink.Paginator,
+          Tink.Telemetry,
+          Tink.Application
+        ]
       ]
     ]
   end
 
   defp aliases do
     [
-      # Setup
-      setup: ["deps.get", "compile"],
-
-      # Quality checks
-      quality: [
-        "format --check-formatted",
-        "credo --strict",
-        "dialyzer"
-      ],
-
-      # Testing
-      test: ["test"],
-      "test.coverage": ["coveralls.html"],
-
-      # Documentation
-      docs: ["docs"],
-      "docs.open": ["docs", "cmd open doc/index.html"],
-
-      # CI
-      ci: [
-        "format --check-formatted",
-        "deps.unlock --check-unused",
-        "credo --strict",
-        "dialyzer",
-        "test --cover"
-      ]
+      "test.ci": ["test --cover --warnings-as-errors"],
+      quality: ["format --check-formatted", "credo --strict", "dialyzer"]
     ]
   end
 end
