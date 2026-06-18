@@ -1,574 +1,140 @@
 defmodule Tink.Connectivity do
   @moduledoc """
-  Connectivity API for checking provider and service availability.
-
-  This module provides functionality to check the connectivity status of:
-  - Financial institution providers
-  - Tink API services
-  - Provider credentials
-  - Data refresh status
-
-  ## Features
-
-  - **Provider Status**: Check if providers are operational
-  - **Credential Health**: Monitor credential connectivity
-  - **Service Health**: Verify Tink API availability
-  - **Market Coverage**: Check provider availability by market
-
-  ## Use Cases
-
-  ### Check Provider Availability Before Connection
-
-      @spec can_connect_to_provider?(String.t(), String.t()) :: boolean()
-
-      def can_connect_to_provider?(provider_id, market) do
-        case Tink.Connectivity.check_provider_status(provider_id, market) do
-          {:ok, %{"status" => "ENABLED"}} ->
-            {:ok, :available}
-
-          {:ok, %{"status" => "DISABLED"}} ->
-            {:error, :temporarily_unavailable}
-
-          {:ok, %{"status" => "OBSOLETE"}} ->
-            {:error, :no_longer_supported}
-
-          {:error, error} ->
-            {:error, error}
-        end
-      end
-
-  ### Monitor Credential Connectivity
-
-      @spec check_user_connections(Client.t()) :: {:ok, list(map())} | {:error, Error.t()}
-
-      def check_user_connections(user_client) do
-        {:ok, credentials} = Tink.Users.list_credentials(user_client)
-
-        Enum.map(credentials["credentials"], fn cred ->
-          status = check_credential_connectivity(cred)
-
-          %{
-            provider: cred["providerName"],
-            status: cred["status"],
-            connectivity: status,
-            last_updated: cred["statusUpdated"]
-          }
-        end)
-      end
-
-      defp check_credential_connectivity(%{"status" => "UPDATED"}), do: :healthy
-      defp check_credential_connectivity(%{"status" => "TEMPORARY_ERROR"}), do: :degraded
-      defp check_credential_connectivity(%{"status" => "AUTHENTICATION_ERROR"}), do: :auth_failed
-      defp check_credential_connectivity(%{"status" => "PERMANENT_ERROR"}), do: :failed
-      defp check_credential_connectivity(_), do: :unknown
-
-  ### Provider Health Dashboard
-
-      @spec get_provider_health_by_market(String.t()) :: {:ok, map()} | {:error, Error.t()}
-
-      def get_provider_health_by_market(market) do
-        {:ok, providers} = Tink.Connectivity.list_providers_by_market(market)
-
-        providers["providers"]
-        |> Enum.group_by(& &1["status"])
-        |> Enum.map(fn {status, providers} ->
-          {status, %{
-            count: length(providers),
-            providers: Enum.map(providers, & &1["name"])
-          }}
-        end)
-        |> Map.new()
-      end
-
-  ## Provider Status Types
-
-  - `ENABLED` - Provider is operational
-  - `DISABLED` - Temporarily unavailable
-  - `OBSOLETE` - No longer supported
-  - `UNKNOWN` - Status cannot be determined
-
-  ## Credential Status Types
-
-  - `CREATED` - Just created, not yet authenticated
-  - `AUTHENTICATING` - Authentication in progress
-  - `UPDATING` - Refreshing data
-  - `UPDATED` - Successfully updated
-  - `TEMPORARY_ERROR` - Temporary connectivity issue
-  - `AUTHENTICATION_ERROR` - Invalid credentials
-  - `PERMANENT_ERROR` - Permanent failure
-  - `AWAITING_MOBILE_BANKID_AUTHENTICATION` - Waiting for BankID
-  - `AWAITING_THIRD_PARTY_APP_AUTHENTICATION` - Waiting for external app
-
-  ## Links
-
-  - [Providers API Documentation](https://docs.tink.com/api/providers)
-  - [Credentials Status Documentation](https://docs.tink.com/api/credentials)
+  Provider connectivity health checks.
+  Requires `providers:read` and `credentials:read`.
   """
 
   alias Tink.{Client, Error}
 
-  # ---------------------------------------------------------------------------
-  # Provider Connectivity
-  # ---------------------------------------------------------------------------
-
-  @doc """
-  Lists providers by market (unauthenticated).
-
-  This endpoint can be called without authentication to check provider
-  availability in a specific market.
-
-  ## Parameters
-
-    * `market` - Market code (e.g., "GB", "SE", "DE")
-
-  ## Returns
-
-    * `{:ok, providers}` - List of providers for the market
-    * `{:error, error}` - If the request fails
-
-  ## Examples
-
-      # Check UK providers (no auth required)
-      {:ok, providers} = Tink.Connectivity.list_providers_by_market("GB")
-      #=> {:ok, %{
-      #     "providers" => [
-      #       %{
-      #         "id" => "provider_123",
-      #         "name" => "Example Bank",
-      #         "displayName" => "Example Bank",
-      #         "status" => "ENABLED",
-      #         "type" => "BANK",
-      #         "financialInstitutionId" => "fi_example_gb",
-      #         "capabilities" => ["TRANSFERS", "ACCOUNT_VERIFICATION"]
-      #       }
-      #     ]
-      #   }}
-
-      # Check German providers
-      {:ok, de_providers} = Tink.Connectivity.list_providers_by_market("DE")
-
-  ## Provider Fields
-
-  - **id**: Provider identifier
-  - **name**: Provider name
-  - **displayName**: Display name
-  - **status**: ENABLED, DISABLED, or OBSOLETE
-  - **type**: BANK, CREDIT_CARD, BROKER, OTHER
-  - **capabilities**: Supported features
-
-  ## No Authentication Required
-
-  This endpoint is publicly accessible and does not require authentication.
-  """
-  @spec list_providers_by_market(String.t()) :: {:ok, map()} | {:error, Error.t()}
-  def list_providers_by_market(market) when is_binary(market) do
-    url = "/api/v1/providers/#{market}"
-
-    # Create a client without authentication
-    client = Tink.client()
-    Client.get(client, url)
+  @doc "List providers for a market. Requires `providers:read`."
+  @spec list_providers(Client.t(), String.t(), keyword()) :: {:ok, map()} | {:error, Error.t()}
+  def list_providers(%Client{} = client, market, opts \\ []) when is_binary(market) do
+    params = maybe_put(%{}, "includeTestProviders", Keyword.get(opts, :include_test))
+    Client.get(client, Client.add_query("/api/v1/providers/#{market}", params))
   end
 
-  @doc """
-  Lists providers by market (authenticated).
-
-  Authenticated version that may return additional provider details.
-
-  ## Parameters
-
-    * `client` - Tink client with `providers:read` scope
-    * `market` - Market code (e.g., "GB", "SE", "DE")
-
-  ## Returns
-
-    * `{:ok, providers}` - List of providers for the market
-    * `{:error, error}` - If the request fails
-
-  ## Examples
-
-      client = Tink.client(scope: "providers:read")
-
-      {:ok, providers} = Tink.Connectivity.list_providers_by_market_authenticated(
-        client,
-        "GB"
-      )
-
-  ## Required Scope
-
-  `providers:read`
-  """
-  @spec list_providers_by_market_authenticated(Client.t(), String.t()) ::
-          {:ok, map()} | {:error, Error.t()}
-  def list_providers_by_market_authenticated(%Client{} = client, market)
-      when is_binary(market) do
-    url = "/api/v1/providers/#{market}"
-    Client.get(client, url)
+  @doc "Check overall Tink API health."
+  @spec check_health(Client.t()) :: {:ok, map()} | {:error, Error.t()}
+  def check_health(%Client{} = client) do
+    Client.get(client, "/api/v1/monitoring/availability")
   end
 
-  @doc """
-  Checks the status of a specific provider.
-
-  ## Parameters
-
-    * `provider_id` - Provider ID
-    * `market` - Market code (optional, for verification)
-
-  ## Returns
-
-    * `{:ok, status}` - Provider status information
-    * `{:error, error}` - If the request fails
-
-  ## Examples
-
-      {:ok, status} = Tink.Connectivity.check_provider_status("provider_123", "GB")
-      #=> {:ok, %{
-      #     "id" => "provider_123",
-      #     "name" => "Example Bank",
-      #     "status" => "ENABLED",
-      #     "statusMessage" => nil,
-      #     "lastChecked" => "2024-01-15T10:00:00Z"
-      #   }}
-
-      # Check if provider is operational
-      case status do
-        {:ok, %{"status" => "ENABLED"}} ->
-          :operational
-
-        {:ok, %{"status" => "DISABLED"}} ->
-          :temporarily_unavailable
-
-        {:ok, %{"status" => "OBSOLETE"}} ->
-          :no_longer_supported
-      end
-
-  ## Status Values
-
-  - `ENABLED` - Provider is working normally
-  - `DISABLED` - Provider is temporarily unavailable
-  - `OBSOLETE` - Provider is no longer supported
-
-  ## No Authentication Required
-  """
-  @spec check_provider_status(String.t(), String.t() | nil) ::
-          {:ok, map()} | {:error, Error.t()}
-  def check_provider_status(provider_id, market \\ nil) when is_binary(provider_id) do
-    # First get provider details
-    client = Tink.client()
-    url = "/api/v1/providers/#{provider_id}"
-
-    case Client.get(client, url) do
-      {:ok, provider} ->
-        # Verify market if provided
-        if market && provider["market"] != market do
-          {:error,
-           %Error{
-             type: :market_mismatch,
-             message: "Provider not available in market #{market}",
-             error_code: 400
-           }}
-        else
-          {:ok,
-           %{
-             "id" => provider["id"],
-             "name" => provider["displayName"] || provider["name"],
-             "status" => provider["status"],
-             "market" => provider["market"],
-             "type" => provider["type"],
-             "capabilities" => provider["capabilities"]
-           }}
-        end
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
-  @doc """
-  Checks if a provider is operational (enabled).
-
-  ## Parameters
-
-    * `provider_id` - Provider ID
-    * `market` - Market code (optional)
-
-  ## Returns
-
-    * `true` if provider is enabled
-    * `false` if provider is disabled or obsolete
-
-  ## Examples
-
-      if Tink.Connectivity.provider_operational?("provider_123", "GB") do
-        # Proceed with connection
-        initiate_connection(provider_id)
-      else
-        # Show error message
-        show_provider_unavailable_message()
-      end
-  """
-  @spec provider_operational?(String.t(), String.t() | nil) :: boolean()
-  def provider_operational?(provider_id, market \\ nil) when is_binary(provider_id) do
-    case check_provider_status(provider_id, market) do
+  @doc "Check if a specific provider is currently operational."
+  @spec provider_operational?(Client.t(), String.t()) :: boolean()
+  def provider_operational?(%Client{} = client, provider_name) when is_binary(provider_name) do
+    case Client.get(client, "/api/v1/providers/#{provider_name}") do
       {:ok, %{"status" => "ENABLED"}} -> true
       _ -> false
     end
   end
 
-  # ---------------------------------------------------------------------------
-  # Credential Connectivity
-  # ---------------------------------------------------------------------------
+  defp maybe_put(map, _k, nil), do: map
+  defp maybe_put(map, k, v), do: Map.put(map, k, v)
+end
 
-  @doc """
-  Checks the connectivity status of user credentials.
+defmodule Tink.Consents do
+  @moduledoc """
+  Full consent lifecycle management via the v2 connectivity API.
 
-  ## Parameters
+  Requires `consents` or `consents:readonly` scope.
 
-    * `client` - Tink client with user access token and `credentials:read` scope
-    * `opts` - Options:
-      * `:include_healthy` - Include healthy credentials (default: true)
-      * `:include_errors` - Include error credentials (default: true)
+  Use this to programmatically create, inspect, and revoke user consents
+  without requiring a Tink Link re-flow for every operation.
 
-  ## Returns
+  ## Example
 
-    * `{:ok, connectivity_report}` - Credential connectivity status
-    * `{:error, error}` - If the request fails
+      {:ok, consent} = Tink.Consents.create(app_client, %{
+        "userId" => tink_user_id,
+        "providerId" => "uk-ob-monzo",
+        "scope" => "accounts:read,transactions:read"
+      })
 
-  ## Examples
+      # Later — check status
+      {:ok, consent} = Tink.Consents.get(app_client, consent["id"])
 
-      user_client = Tink.client(access_token: user_access_token)
+      # Revoke when no longer needed
+      {:ok, _} = Tink.Consents.revoke(app_client, consent["id"])
 
-      {:ok, report} = Tink.Connectivity.check_credential_connectivity(user_client)
-      #=> {:ok, %{
-      #     "total" => 3,
-      #     "healthy" => 2,
-      #     "degraded" => 1,
-      #     "failed" => 0,
-      #     "credentials" => [
-      #       %{
-      #         "credentialId" => "cred_123",
-      #         "provider" => "Example Bank",
-      #         "status" => "UPDATED",
-      #         "connectivity" => "healthy",
-      #         "lastUpdated" => "2024-01-15T10:00:00Z"
-      #       },
-      #       %{
-      #         "credentialId" => "cred_456",
-      #         "provider" => "Another Bank",
-      #         "status" => "TEMPORARY_ERROR",
-      #         "connectivity" => "degraded",
-      #         "lastUpdated" => "2024-01-15T09:00:00Z",
-      #         "errorMessage" => "Temporary connection issue"
-      #       }
-      #     ]
-      #   }}
-
-      # Check only problematic credentials
-      {:ok, issues} = Tink.Connectivity.check_credential_connectivity(
-        user_client,
-        include_healthy: false
-      )
-
-  ## Connectivity Classifications
-
-  - **healthy**: Credential is working normally
-  - **degraded**: Temporary issues but may recover
-  - **auth_failed**: Authentication failed, requires user action
-  - **failed**: Permanent failure
-  - **authenticating**: Authentication in progress
-  - **updating**: Data refresh in progress
-
-  ## Required Scope
-
-  `credentials:read`
   """
-  @spec check_credential_connectivity(Client.t(), keyword()) ::
+
+  alias Tink.{Client, Error, Paginator, Utils}
+
+  @doc "Create a new consent. Requires `consents`."
+  @spec create(Client.t(), map()) :: {:ok, map()} | {:error, Error.t()}
+  def create(%Client{} = client, %{} = params) do
+    Client.post(client, "/connectivity/v2/consents", params)
+  end
+
+  @doc "List consents with pagination. Requires `consents:readonly`."
+  @spec list(Client.t(), keyword()) :: {:ok, map()} | {:error, Error.t()}
+  def list(%Client{} = client, opts \\ []) do
+    params = Utils.pagination_params(opts)
+    Client.get(client, Client.add_query("/connectivity/v2/consents", params))
+  end
+
+  @doc "Stream all consents across pages lazily."
+  @spec stream(Client.t(), keyword()) :: Enumerable.t()
+  def stream(%Client{} = client, opts \\ []) do
+    Paginator.stream(
+      fn token -> list(client, Keyword.put(opts, :page_token, token)) end,
+      items_key: "consents"
+    )
+  end
+
+  @doc "Get a consent by ID. Requires `consents:readonly`."
+  @spec get(Client.t(), String.t()) :: {:ok, map()} | {:error, Error.t()}
+  def get(%Client{} = client, consent_id) when is_binary(consent_id) do
+    Client.get(client, "/connectivity/v2/consents/#{consent_id}")
+  end
+
+  @doc "Revoke a consent. Requires `consents`."
+  @spec revoke(Client.t(), String.t()) :: {:ok, map()} | {:error, Error.t()}
+  def revoke(%Client{} = client, consent_id) when is_binary(consent_id) do
+    Client.post(client, "/connectivity/v2/consents/#{consent_id}:revoke", %{})
+  end
+
+  @doc "List authorizations for a consent. Requires `consents:readonly`."
+  @spec list_authorizations(Client.t(), String.t()) :: {:ok, map()} | {:error, Error.t()}
+  def list_authorizations(%Client{} = client, consent_id) when is_binary(consent_id) do
+    Client.get(client, "/connectivity/v2/consents/#{consent_id}/authorizations")
+  end
+
+  @doc "Get a specific authorization for a consent. Requires `consents:readonly`."
+  @spec get_authorization(Client.t(), String.t(), String.t()) ::
           {:ok, map()} | {:error, Error.t()}
-  def check_credential_connectivity(%Client{} = client, opts \\ []) do
-    include_healthy = Keyword.get(opts, :include_healthy, true)
-    include_errors = Keyword.get(opts, :include_errors, true)
-
-    url = "/api/v1/credentials/list"
-
-    case Client.get(client, url) do
-      {:ok, %{"credentials" => credentials}} ->
-        analyzed = Enum.map(credentials, &analyze_credential/1)
-
-        filtered =
-          analyzed
-          |> maybe_filter_healthy(include_healthy)
-          |> maybe_filter_errors(include_errors)
-
-        summary = %{
-          "total" => length(credentials),
-          "healthy" => count_by_connectivity(analyzed, "healthy"),
-          "degraded" => count_by_connectivity(analyzed, "degraded"),
-          "failed" =>
-            count_by_connectivity(analyzed, "failed") +
-              count_by_connectivity(analyzed, "auth_failed"),
-          "credentials" => filtered
-        }
-
-        {:ok, summary}
-
-      {:error, _} = error ->
-        error
-    end
+  def get_authorization(%Client{} = client, consent_id, authorization_id)
+      when is_binary(consent_id) and is_binary(authorization_id) do
+    Client.get(client, "/connectivity/v2/consents/#{consent_id}/authorizations/#{authorization_id}")
   end
 
-  @doc """
-  Gets detailed connectivity information for a specific credential.
+  @doc "Relay an authorization callback (server-side relay flows). Requires `consents`."
+  @spec relay_authorization_callback(Client.t(), map()) :: {:ok, map()} | {:error, Error.t()}
+  def relay_authorization_callback(%Client{} = client, %{} = params) do
+    Client.post(client, "/connectivity/v2/authorizations:relay-callback", params)
+  end
 
-  ## Parameters
+  @doc "Get a consent template for a provider. Requires `consents:readonly`."
+  @spec get_template(Client.t(), String.t()) :: {:ok, map()} | {:error, Error.t()}
+  def get_template(%Client{} = client, provider_id) when is_binary(provider_id) do
+    Client.get(client, "/connectivity/v2/consent-templates/#{provider_id}")
+  end
+end
 
-    * `client` - Tink client with user access token and `credentials:read` scope
-    * `credential_id` - Credential ID
-
-  ## Returns
-
-    * `{:ok, connectivity_info}` - Detailed connectivity information
-    * `{:error, error}` - If the request fails
-
-  ## Examples
-
-      user_client = Tink.client(access_token: user_access_token)
-
-      {:ok, info} = Tink.Connectivity.get_credential_connectivity(
-        user_client,
-        "cred_123"
-      )
-      #=> {:ok, %{
-      #     "credentialId" => "cred_123",
-      #     "provider" => "Example Bank",
-      #     "providerId" => "provider_123",
-      #     "status" => "UPDATED",
-      #     "connectivity" => "healthy",
-      #     "lastUpdated" => "2024-01-15T10:00:00Z",
-      #     "lastSuccess" => "2024-01-15T10:00:00Z",
-      #     "canRefresh" => true
-      #   }}
-
-  ## Required Scope
-
-  `credentials:read`
+defmodule Tink.ProviderConsents do
+  @moduledoc """
+  Provider-level consent management (legacy v1 consent API).
+  Requires `provider-consents:read` and `provider-consents:write` scopes.
   """
-  @spec get_credential_connectivity(Client.t(), String.t()) ::
-          {:ok, map()} | {:error, Error.t()}
-  def get_credential_connectivity(%Client{} = client, credential_id)
-      when is_binary(credential_id) do
-    url = "/api/v1/credentials/#{credential_id}"
 
-    case Client.get(client, url) do
-      {:ok, credential} ->
-        {:ok, analyze_credential(credential)}
+  alias Tink.{Client, Error}
 
-      {:error, _} = error ->
-        error
-    end
-  end
+  @doc "List all provider consents. Requires `provider-consents:read`."
+  @spec list(Client.t()) :: {:ok, map()} | {:error, Error.t()}
+  def list(%Client{} = client), do: Client.get(client, "/api/v1/provider-consents")
 
-  # ---------------------------------------------------------------------------
-  # Service Health
-  # ---------------------------------------------------------------------------
-
-  @doc """
-  Checks if the Tink API is accessible.
-
-  Performs a basic connectivity check to verify the API is reachable.
-
-  ## Returns
-
-    * `{:ok, :healthy}` - API is accessible
-    * `{:error, reason}` - API is not accessible
-
-  ## Examples
-
-      case Tink.Connectivity.check_api_health() do
-        {:ok, :healthy} ->
-          Logger.info("Tink API is operational")
-          :ok
-
-        {:error, reason} ->
-          Logger.error("Tink API unreachable: \#{inspect(reason)}")
-          {:error, :api_unavailable}
-      end
-
-  ## Use Cases
-
-  - **Health Checks**: Verify service availability
-  - **Monitoring**: Track API uptime
-  - **Diagnostics**: Debug connectivity issues
-  """
-  @spec check_api_health() :: {:ok, :healthy} | {:error, binary()}
-  def check_api_health do
-    # Use unauthenticated endpoint to check API health
-    case list_providers_by_market("GB") do
-      {:ok, _} ->
-        {:ok, :healthy}
-
-      {:error, %Error{message: message}} ->
-        {:error, message}
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Private Helper Functions
-  # ---------------------------------------------------------------------------
-
-  defp analyze_credential(credential) do
-    connectivity = classify_connectivity(credential["status"])
-
-    %{
-      "credentialId" => credential["id"],
-      "provider" => credential["providerName"],
-      "providerId" => credential["providerId"],
-      "status" => credential["status"],
-      "connectivity" => connectivity,
-      "lastUpdated" => credential["statusUpdated"],
-      "canRefresh" => can_refresh?(credential["status"])
-    }
-    |> maybe_add_error_message(credential)
-  end
-
-  defp classify_connectivity("UPDATED"), do: "healthy"
-  defp classify_connectivity("CREATED"), do: "pending"
-  defp classify_connectivity("AUTHENTICATING"), do: "authenticating"
-  defp classify_connectivity("UPDATING"), do: "updating"
-  defp classify_connectivity("TEMPORARY_ERROR"), do: "degraded"
-  defp classify_connectivity("AUTHENTICATION_ERROR"), do: "auth_failed"
-  defp classify_connectivity("PERMANENT_ERROR"), do: "failed"
-
-  defp classify_connectivity("AWAITING_MOBILE_BANKID_AUTHENTICATION"),
-    do: "authenticating"
-
-  defp classify_connectivity("AWAITING_THIRD_PARTY_APP_AUTHENTICATION"),
-    do: "authenticating"
-
-  defp classify_connectivity(_), do: "unknown"
-
-  defp can_refresh?("UPDATED"), do: true
-  defp can_refresh?("TEMPORARY_ERROR"), do: true
-  defp can_refresh?(_), do: false
-
-  defp maybe_add_error_message(info, %{"statusPayload" => payload})
-       when is_binary(payload) do
-    Map.put(info, "errorMessage", payload)
-  end
-
-  defp maybe_add_error_message(info, _), do: info
-
-  defp count_by_connectivity(credentials, connectivity) do
-    Enum.count(credentials, &(&1["connectivity"] == connectivity))
-  end
-
-  defp maybe_filter_healthy(credentials, true), do: credentials
-
-  defp maybe_filter_healthy(credentials, false) do
-    Enum.reject(credentials, &(&1["connectivity"] == "healthy"))
-  end
-
-  defp maybe_filter_errors(credentials, true), do: credentials
-
-  defp maybe_filter_errors(credentials, false) do
-    Enum.reject(credentials, &(&1["connectivity"] in ["failed", "auth_failed"]))
+  @doc "Extend a provider consent. Requires `provider-consents:write`."
+  @spec extend(Client.t(), map()) :: {:ok, map()} | {:error, Error.t()}
+  def extend(%Client{} = client, %{} = params) do
+    Client.post(client, "/api/v1/provider-consents:extend", params)
   end
 end
