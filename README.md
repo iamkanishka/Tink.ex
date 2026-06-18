@@ -1,3 +1,6 @@
+<img width="2008" height="1000" alt="image" src="https://github.com/user-attachments/assets/4303b573-8328-4780-97af-ee0d2b55a8d8" />
+
+
 # Tink
 
 [![Hex.pm](https://img.shields.io/hexpm/v/tink.svg)](https://hex.pm/packages/tink)
@@ -72,4 +75,8 @@ live fetch.
 
 ## License
 
+<<<<<<< HEAD
 Apache-2.0. See [LICENSE](LICENSE).
+=======
+MIT — see [LICENSE](LICENSE).
+>>>>>>> d961afd02e5226b2460bd8fc69245420f88b385b
