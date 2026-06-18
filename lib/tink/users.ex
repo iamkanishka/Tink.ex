@@ -1,142 +1,66 @@
 defmodule Tink.Users do
   @moduledoc """
-  Users API with cache invalidation on mutations.
+  User management. Most operations require an application-level client
+  (client credentials token) rather than a user token.
 
-  User operations that modify state automatically invalidate the cache.
+  ## Scopes
+  - `user:create` — create users
+  - `user:read` — get/list user data
+  - `user:write` — update user data
+  - `user:delete` — delete users
   """
 
-  alias Tink.{Cache, Client, Error}
-
-  # ---------------------------------------------------------------------------
-  # User Management (No Caching - Mutations)
-  # ---------------------------------------------------------------------------
+  alias Tink.{Client, Error, Utils}
 
   @doc """
-  Creates a new Tink user.
+  Create a new permanent Tink user. Requires `user:create` scope.
 
-  This is a mutation operation - no caching, but doesn't invalidate either
-  since the user is new.
+  ## Params map keys
+  - `"externalUserId"` — your system's user ID (required)
+  - `"market"` — ISO 3166-1 alpha-2 market code, e.g. `"GB"`
+  - `"locale"` — BCP 47 locale, e.g. `"en_US"`
   """
   @spec create_user(Client.t(), map()) :: {:ok, map()} | {:error, Error.t()}
-  def create_user(%Client{} = client, params) when is_map(params) do
-    url = "/api/v1/user/create"
+  def create_user(%Client{} = client, %{} = params) do
+    body =
+      %{}
+      |> Utils.put_if_present(
+        "externalUserId",
+        params[:external_user_id] || params["externalUserId"]
+      )
+      |> Utils.put_if_present("market", params[:market] || params["market"])
+      |> Utils.put_if_present("locale", params[:locale] || params["locale"])
 
-    body = %{
-      "external_user_id" => Map.fetch!(params, :external_user_id),
-      "locale" => Map.fetch!(params, :locale),
-      "market" => Map.fetch!(params, :market)
-    }
-
-    Client.post(client, url, body)
+    Client.post(client, "/api/v1/user/create", body)
   end
 
+  @doc "Get the current authenticated user. Requires `user:read` scope."
+  @spec get_user(Client.t()) :: {:ok, map()} | {:error, Error.t()}
+  def get_user(%Client{} = client), do: Client.get(client, "/api/v1/user")
+
+  @doc "Get the user profile. Requires `user:read` scope."
+  @spec get_profile(Client.t()) :: {:ok, map()} | {:error, Error.t()}
+  def get_profile(%Client{} = client), do: Client.get(client, "/api/v1/user/profile")
+
+  @doc "Update user properties. Requires `user:write` scope."
+  @spec update_user(Client.t(), map()) :: {:ok, map()} | {:error, Error.t()}
+  def update_user(%Client{} = client, %{} = params), do: Client.put(client, "/api/v1/user", params)
+
+  @doc "Update user profile. Requires `user:write` scope."
+  @spec update_profile(Client.t(), map()) :: {:ok, map()} | {:error, Error.t()}
+  def update_profile(%Client{} = client, %{} = params),
+    do: Client.put(client, "/api/v1/user/profile", params)
+
   @doc """
-  Deletes a Tink user and invalidates all their cached data.
+  Delete a permanent Tink user and all their data. Requires `user:delete` scope.
+
+  Returns `:ok` on success.
   """
   @spec delete_user(Client.t(), String.t()) :: :ok | {:error, Error.t()}
   def delete_user(%Client{} = client, user_id) when is_binary(user_id) do
-    url = "/api/v1/user/delete"
-    body = %{"user_id" => user_id}
-
-    case Client.post(client, url, body) do
-      {:ok, _} ->
-        Cache.invalidate_user(user_id)
-        :ok
-
-      {:error, _} = error ->
-        error
+    case Client.post(client, "/api/v1/user/delete", %{"userId" => user_id}) do
+      {:ok, _} -> :ok
+      {:error, _} = err -> err
     end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Credentials Management (Short Cache + Invalidation)
-  # ---------------------------------------------------------------------------
-
-  @doc """
-  Lists credentials for a user with short-term caching (30 seconds).
-
-  Credential status changes frequently during authentication, so cache is short.
-  """
-  @spec list_credentials(Client.t()) :: {:ok, map()} | {:error, Error.t()}
-  def list_credentials(%Client{} = client) do
-    url = "/api/v1/credentials/list"
-    # Automatic caching via Client module — :credentials resource type = 30 second TTL
-    Client.get(client, url)
-  end
-
-  @doc """
-  Gets a specific credential with short-term caching.
-  """
-  @spec get_credential(Client.t(), String.t()) :: {:ok, map()} | {:error, Error.t()}
-  def get_credential(%Client{} = client, credential_id) when is_binary(credential_id) do
-    url = "/api/v1/credentials/#{credential_id}"
-    Client.get(client, url)
-  end
-
-  @doc """
-  Deletes a credential and invalidates user cache.
-
-  Returns `{:ok, map()}` on success (the response body) or `{:error, error}` on failure.
-  Cache invalidation is handled automatically by `Client.delete/3`.
-  """
-  @spec delete_credential(Client.t(), String.t()) :: {:ok, map()} | {:error, Error.t()}
-  def delete_credential(%Client{} = client, credential_id) when is_binary(credential_id) do
-    url = "/api/v1/credentials/#{credential_id}"
-    # Client.delete/3 handles cache invalidation automatically on success
-    Client.delete(client, url)
-  end
-
-  @doc """
-  Refreshes a credential and invalidates user cache.
-
-  Triggers a data refresh from the bank. Cache is invalidated automatically by
-  `Client.post/4` on success; no extra invalidation is needed here.
-  """
-  @spec refresh_credential(Client.t(), String.t()) :: {:ok, map()} | {:error, Error.t()}
-  def refresh_credential(%Client{} = client, credential_id)
-      when is_binary(credential_id) do
-    url = "/api/v1/credentials/#{credential_id}/refresh"
-    # Client.post handles cache invalidation automatically on success
-    Client.post(client, url, %{})
-  end
-
-  # ---------------------------------------------------------------------------
-  # Authorization (No Caching)
-  # ---------------------------------------------------------------------------
-
-  @doc """
-  Creates an authorization grant for a user.
-
-  No caching — this is an authorization operation.
-  """
-  @spec create_authorization(Client.t(), map()) :: {:ok, map()} | {:error, Error.t()}
-  def create_authorization(%Client{} = client, params) when is_map(params) do
-    url = "/api/v1/oauth/authorization-grant"
-
-    body = %{
-      "user_id" => Map.fetch!(params, :user_id),
-      "scope" => Map.fetch!(params, :scope)
-    }
-
-    Client.post(client, url, body, content_type: "application/x-www-form-urlencoded")
-  end
-
-  @doc """
-  Gets a user access token from an authorization code.
-
-  No caching — this is an authentication operation.
-  """
-  @spec get_user_access_token(Client.t(), String.t()) :: {:ok, map()} | {:error, Error.t()}
-  def get_user_access_token(%Client{} = client, code) when is_binary(code) do
-    url = "/api/v1/oauth/token"
-
-    body = %{
-      "client_id" => client.client_id,
-      "client_secret" => client.client_secret,
-      "grant_type" => "authorization_code",
-      "code" => code
-    }
-
-    Client.post(client, url, body, content_type: "application/x-www-form-urlencoded")
   end
 end
