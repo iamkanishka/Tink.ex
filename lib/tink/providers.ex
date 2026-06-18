@@ -1,92 +1,58 @@
 defmodule Tink.Providers do
   @moduledoc """
-  Providers API with explicit caching (1-hour TTL for list, 2-hour for individual).
+  Bank provider directory. Requires `providers:read` scope.
 
-  Provider data rarely changes — banks don't appear or disappear frequently —
-  making it an ideal candidate for aggressive caching. Both `list_providers/2`
-  and `get_provider/2` cache their responses explicitly via `Tink.Cache.fetch/3`.
-
-  ## Cache Keys
-
-    * List: `"providers:<market>:<capabilities>"`
-    * Individual: `"providers:provider:<provider_id>"`
-
-  Cache is invalidated automatically when the client's TTL expires. To force a
-  fresh fetch, pass `cache: false` on the client or call `Tink.Cache.clear/0`.
-
-  ## Required Scopes
-
-  - `providers:read` — authenticated access
+  Provider lists are cached globally (not per-user) since they are the same
+  for all users: `list_for_market` is cached 2h, `list_markets` cached 2h.
   """
 
-  alias Tink.{Cache, Client, Error, Helpers}
+  alias Tink.{Cache, Client, Error, Utils}
 
-  @list_ttl :timer.hours(1)
-  @item_ttl :timer.hours(2)
-
-  @doc """
-  Lists all available providers with explicit caching.
-
-  ## Parameters
-
-    * `client` - Tink client
-    * `opts` - Query options:
-      * `:market` - ISO 3166-1 alpha-2 code (e.g. `"GB"`)
-      * `:capabilities` - List of required capabilities
-      * `:cache` - Override (`true` | `false`)
-
-  ## Examples
-
-      {:ok, providers} = Tink.Providers.list_providers(client, market: "GB")
-  """
-  @spec list_providers(Client.t(), keyword()) :: {:ok, map()} | {:error, Error.t()}
-  def list_providers(%Client{} = client, opts \\ []) do
-    url = Helpers.build_url("/api/v1/providers", build_query_params(opts))
-
-    if client.cache && Cache.enabled?() do
-      cache_key = list_cache_key(opts)
-      Cache.fetch(cache_key, fn -> Client.get(client, url, cache: false) end, ttl: @list_ttl)
-    else
-      Client.get(client, url, cache: false)
-    end
-  end
-
-  @doc """
-  Gets detailed information about a specific provider with caching.
-
-  Individual providers are cached for 2 hours by provider ID.
-
-  ## Examples
-
-      {:ok, provider} = Tink.Providers.get_provider(client, "uk-ob-barclays")
-  """
-  @spec get_provider(Client.t(), String.t()) :: {:ok, map()} | {:error, Error.t()}
-  def get_provider(%Client{} = client, provider_id) when is_binary(provider_id) do
-    url = "/api/v1/providers/#{provider_id}"
-
-    if client.cache && Cache.enabled?() do
-      cache_key = "providers:provider:#{provider_id}"
-      Cache.fetch(cache_key, fn -> Client.get(client, url, cache: false) end, ttl: @item_ttl)
-    else
-      Client.get(client, url, cache: false)
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Private helpers
-  # ---------------------------------------------------------------------------
-
-  defp build_query_params(opts) do
-    Enum.reduce(opts, [], fn
-      {:market, market}, acc -> [{:market, market} | acc]
-      {:capabilities, caps}, acc -> [{:capabilities, Enum.join(caps, ",")} | acc]
-      _, acc -> acc
+  @doc "List all markets with providers. Cached 2h globally."
+  @spec list_markets(Client.t()) :: {:ok, map()} | {:error, Error.t()}
+  def list_markets(client) do
+    Cache.fetch(Cache.global_key("markets"), :providers, Client.cache_enabled?(client), fn ->
+      Client.get(client, "/api/v1/providers/markets")
     end)
   end
 
-  defp list_cache_key(opts) do
-    market = Keyword.get(opts, :market, "all")
-    caps = opts |> Keyword.get(:capabilities, []) |> Enum.sort() |> Enum.join(",")
-    Cache.build_key(["providers", market, caps])
+  @doc "List providers for a market. Cached 2h globally per market."
+  @spec list_for_market(Client.t(), String.t(), keyword()) :: {:ok, map()} | {:error, Error.t()}
+  def list_for_market(client, market, opts \\ []) do
+    params = Utils.put_if_present(%{}, "includeTestProviders", Keyword.get(opts, :include_test))
+    path = Client.add_query("/api/v1/providers/#{market}", params)
+    key = Cache.global_key("providers", market)
+
+    Cache.fetch(key, :providers, Client.cache_enabled?(client), fn ->
+      Client.get(client, path)
+    end)
+  end
+
+  @doc "Get a single provider by name. Cached 1h globally."
+  @spec get(Client.t(), String.t()) :: {:ok, map()} | {:error, Error.t()}
+  def get(client, provider_name) do
+    key = Cache.global_key("provider", provider_name)
+
+    Cache.fetch(key, :providers, Client.cache_enabled?(client), fn ->
+      Client.get(client, "/api/v1/providers/#{provider_name}")
+    end)
+  end
+
+  @doc "List all provider identifiers. Requires `providers:read`."
+  @spec list_identifiers(Client.t()) :: {:ok, map()} | {:error, Error.t()}
+  def list_identifiers(client) do
+    Client.get(client, "/api/v1/provider-identifiers")
+  end
+
+  @doc "Get auth options for a specific provider. Requires `providers:read`."
+  @spec get_auth_options(Client.t(), String.t()) :: {:ok, map()} | {:error, Error.t()}
+  def get_auth_options(client, provider_name) do
+    Client.get(client, "/api/v1/provider-authentication-options/#{provider_name}")
+  end
+
+  @doc "Get auth options for all providers in a market. Requires `providers:read`."
+  @spec get_auth_options_for_market(Client.t(), String.t()) :: {:ok, map()} | {:error, Error.t()}
+  def get_auth_options_for_market(client, market) do
+    Client.get(client, "/api/v1/provider-authentication-options-for-market/#{market}")
   end
 end
