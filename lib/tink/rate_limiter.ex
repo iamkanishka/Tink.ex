@@ -1,206 +1,106 @@
 defmodule Tink.RateLimiter do
   @moduledoc """
-  Rate limiting for Tink API requests using Hammer 7.2.
+  Client-side rate limiting using Hammer (token bucket / ETS backend).
 
-  Uses a private `Tink.RateLimiter.Backend` module backed by Hammer's
-  fixed-window ETS algorithm. The backend process is supervised by
-  `Tink.Application` and must be running before any rate-limit functions
-  are called.
+  Prevents your application from sending too many requests and hitting Tink's
+  429 rate limit. Configured per `client_id` so multiple application clients
+  share the same bucket.
 
-  ## Algorithm
-
-  Fixed window (`Hammer.ETS.FixWindow`) is used because Tink's rate limits
-  are expressed as "N requests per hour" — exactly what a fixed window
-  enforces with minimal overhead.
+  Per Tink's docs: rate limits are validated on a per-app-ID basis, and
+  exceeding them returns an HTTP 429 Too Many Requests response. Tink does
+  not publish an exact request-per-minute number — contact Tink support if
+  you are consistently hitting 429s during expected use.
 
   ## Configuration
 
       config :tink,
-        enable_rate_limiting: true
+        rate_limit: [
+          enabled:          true,
+          requests_per_min: 600,    # conservative client-side default — Tink
+                                     # enforces its own per-app-ID server-side
+                                     # limit but does not publish an exact
+                                     # number; tune this to match your plan
+          burst_size:       60      # max burst above the per-minute rate
+        ]
 
-  Optionally tune the cleanup interval (default: every 5 minutes):
+  ## Disabling rate limiting
 
-      config :tink, Tink.RateLimiter.Backend,
-        clean_period: :timer.minutes(5)
+      config :tink, rate_limit: [enabled: false]
 
-  ## Hammer 7.2 API used
+  ## Usage
 
-  `Backend.hit(key, scale_ms, limit)` — increments the counter and checks
-  the limit atomically. Returns `{:allow, count}` or `{:deny, ms_to_reset}`.
+  Rate limiting is applied automatically by `Tink.Client` before each request.
+  You can also check or consume the bucket manually:
 
-  `Backend.get(key, scale_ms)` — returns the current count without incrementing.
+      case Tink.RateLimiter.check(client) do
+        :ok                          -> # proceed
+        {:error, :rate_limited, ms}  -> # wait ms milliseconds
+      end
 
   ## Telemetry
 
-  Emits:
-  - `[:tink, :rate_limit, :checked]` — check performed
-  - `[:tink, :rate_limit, :exceeded]` — limit exceeded
+  Emits `[:tink, :rate_limit, :check]` with metadata `%{key, allowed}`.
   """
 
-  require Logger
+  alias Tink.{Config, Telemetry}
 
-  alias Tink.Config
+  @default_rpm 600
+  @default_burst 60
+  @bucket_prefix "tink_rl:"
 
-  @default_limit 100
-  @default_period :timer.hours(1)
-
-  # ---------------------------------------------------------------------------
-  # Hammer 7.2 backend module
-  #
-  # `use Hammer, backend: :ets, algorithm: :fix_window` injects:
-  #   - start_link/1   — starts the ETS table owner / cleanup GenServer
-  #   - hit/3          — hit(key, scale_ms, limit) :: {:allow, count} | {:deny, ms_to_reset}
-  #   - hit/4          — hit(key, scale_ms, limit, increment)
-  #   - get/2          — get(key, scale_ms) :: non_neg_integer()
-  #   - inc/3          — inc(key, scale_ms, increment) :: non_neg_integer()
-  #
-  # Must be added to the supervision tree via Tink.Application.
-  # ---------------------------------------------------------------------------
-
-  defmodule Backend do
-    @moduledoc false
-    use Hammer, backend: :ets, algorithm: :fix_window
-  end
-
-  # ---------------------------------------------------------------------------
-  # Public API
-  # ---------------------------------------------------------------------------
-
-  @doc """
-  Checks whether a request is within the configured rate limit.
-
-  Increments the counter for `key` in the current window. Returns `:ok` if
-  the request is allowed, or `{:error, :rate_limited}` if the limit is exceeded.
-
-  ## Parameters
-
-    * `key` - Bucket identifier, e.g. a user ID or operation name
-    * `opts` - Options:
-      * `:limit` - Maximum requests per window (default: 100)
-      * `:period` - Window duration in milliseconds (default: 1 hour)
-
-  ## Examples
-
-      iex> Tink.RateLimiter.check("user_123")
-      :ok
-
-      iex> Tink.RateLimiter.check("user_123", limit: 50, period: :timer.minutes(30))
-      :ok
-  """
-  @spec check(String.t(), keyword()) :: :ok | {:error, :rate_limited}
-  def check(key, opts \\ []) do
-    if Config.rate_limiting_enabled?() do
-      do_check(key, opts)
+  @doc "Check and consume one token for the given client. Returns `:ok` or `{:error, :rate_limited, retry_after_ms}`."
+  @spec check(String.t()) :: :ok | {:error, :rate_limited, non_neg_integer()}
+  def check(client_key) do
+    if enabled?() do
+      do_check(client_key)
     else
       :ok
     end
   end
 
-  @doc """
-  Returns the number of requests remaining in the current window for `key`.
-
-  Does **not** increment the counter. Returns `{:ok, :infinity}` when rate
-  limiting is disabled.
-
-  ## Examples
-
-      iex> Tink.RateLimiter.remaining("user_123")
-      {:ok, 95}
-
-      iex> Tink.RateLimiter.remaining("unknown_key")
-      {:ok, 100}
-  """
-  @spec remaining(String.t(), keyword()) :: {:ok, non_neg_integer() | :infinity}
-  def remaining(key, opts \\ []) do
-    if Config.rate_limiting_enabled?() do
-      limit = Keyword.get(opts, :limit, @default_limit)
-      period_ms = Keyword.get(opts, :period, @default_period)
-      bucket_key = build_bucket_key(key)
-
-      count = Backend.get(bucket_key, period_ms)
-      {:ok, max(0, limit - count)}
-    else
-      {:ok, :infinity}
-    end
+  @doc "Whether rate limiting is enabled per config."
+  @spec enabled?() :: boolean()
+  def enabled? do
+    cfg = Config.rate_limit_cfg()
+    Keyword.get(cfg, :enabled, true)
   end
 
-  @doc """
-  Returns detailed rate limit information for `key`.
-
-  ## Returns
-
-    * `{:ok, map}` — Map with `:count`, `:limit`, `:remaining`
-    * `{:ok, map}` — With `:resets_in_ms` set to `0` when rate limiting is off
-
-  ## Examples
-
-      iex> Tink.RateLimiter.info("user_123")
-      {:ok, %{count: 5, limit: 100, remaining: 95}}
-  """
-  @spec info(String.t(), keyword()) :: {:ok, map()}
-  def info(key, opts \\ []) do
-    if Config.rate_limiting_enabled?() do
-      limit = Keyword.get(opts, :limit, @default_limit)
-      period_ms = Keyword.get(opts, :period, @default_period)
-      bucket_key = build_bucket_key(key)
-
-      count = Backend.get(bucket_key, period_ms)
-
-      {:ok,
-       %{
-         count: count,
-         limit: limit,
-         remaining: max(0, limit - count)
-       }}
-    else
-      {:ok, %{count: 0, limit: :infinity, remaining: :infinity}}
-    end
+  @doc "Return the configured requests-per-minute limit."
+  @spec requests_per_minute() :: pos_integer()
+  def requests_per_minute do
+    cfg = Config.rate_limit_cfg()
+    Keyword.get(cfg, :requests_per_min, @default_rpm)
   end
 
-  # ---------------------------------------------------------------------------
-  # Private helpers
-  # ---------------------------------------------------------------------------
+  @doc "Return the burst size."
+  @spec burst_size() :: pos_integer()
+  def burst_size do
+    cfg = Config.rate_limit_cfg()
+    Keyword.get(cfg, :burst_size, @default_burst)
+  end
 
-  defp do_check(key, opts) do
-    limit = Keyword.get(opts, :limit, @default_limit)
-    period_ms = Keyword.get(opts, :period, @default_period)
-    bucket_key = build_bucket_key(key)
+  # ── Private ───────────────────────────────────────────────────────────────────
 
-    emit_check_telemetry(key, limit, period_ms)
+  defp do_check(client_key) do
+    bucket = @bucket_prefix <> client_key
+    scale_ms = 60_000
+    limit = requests_per_minute()
 
-    # Backend.hit/3 atomically increments the counter and checks the limit.
-    # {:allow, count}        — request is within the limit
-    # {:deny, ms_to_reset}   — limit exceeded; ms_to_reset is time until the window resets
-    case Backend.hit(bucket_key, period_ms, limit) do
+    result = Hammer.check_rate(bucket, scale_ms, limit)
+    Telemetry.rate_limit_check(client_key, match?({:allow, _}, result))
+
+    case result do
       {:allow, _count} ->
         :ok
 
-      {:deny, _ms_to_reset} ->
-        emit_exceeded_telemetry(key, limit, period_ms)
-        log_rate_limit_exceeded(key)
-        {:error, :rate_limited}
+      {:deny, _limit} ->
+        retry_after = compute_retry_after(scale_ms, limit)
+        {:error, :rate_limited, retry_after}
     end
   end
 
-  defp build_bucket_key(key), do: "tink:rate_limit:#{key}"
-
-  defp emit_check_telemetry(key, limit, period_ms) do
-    :telemetry.execute(
-      [:tink, :rate_limit, :checked],
-      %{},
-      %{key: key, limit: limit, period_ms: period_ms}
-    )
-  end
-
-  defp emit_exceeded_telemetry(key, limit, period_ms) do
-    :telemetry.execute(
-      [:tink, :rate_limit, :exceeded],
-      %{},
-      %{key: key, limit: limit, period_ms: period_ms}
-    )
-  end
-
-  defp log_rate_limit_exceeded(key) do
-    Logger.warning("[Tink.RateLimiter] Rate limit exceeded for key: #{key}")
+  defp compute_retry_after(scale_ms, limit) do
+    # How many ms until one token is available
+    div(scale_ms, limit)
   end
 end
