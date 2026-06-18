@@ -1,127 +1,75 @@
 # Tink
 
 [![Hex.pm](https://img.shields.io/hexpm/v/tink.svg)](https://hex.pm/packages/tink)
-[![Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/tink)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-A production-ready Elixir client for the [Tink open banking API](https://docs.tink.com).
+A complete, production-grade Elixir client for the [Tink Open Banking
+API](https://docs.tink.com). Covers data aggregation (accounts, transactions,
+identities, investments, loans), enrichment (categories, recurring,
+merchants, on-demand enrichment, sustainability), payments and VRP, risk
+insights, income/expense checks, savings goals and other personal-finance
+modules, connectivity/consents, webhooks, and more.
 
-Tink provides comprehensive access to Tink's full product suite — account
-aggregation, transaction data, financial insights, account and income
-verification — with built-in retry logic, optional caching, and optional
-rate limiting.
-
-## Features
-
-- Full coverage of the Tink REST API
-- OAuth 2.0 authentication (client credentials + authorization code)
-- Automatic retry with exponential backoff and jitter
-- Optional response caching via [Cachex](https://hex.pm/packages/cachex)
-- Optional rate limiting via [Hammer](https://hex.pm/packages/hammer) 7.x
-- Webhook signature verification (constant-time HMAC)
-- Telemetry events for all HTTP requests, cache, and rate limit operations
-- Strict TLS in production; zero runtime dependencies on `Mix`
+Built on `Req`/Finch, with typed errors, telemetry, client-side caching
+(Cachex) and rate limiting (Hammer), and full test coverage against a mocked
+HTTP adapter.
 
 ## Installation
 
+Add `tink` to your list of dependencies in `mix.exs`:
+
 ```elixir
-# mix.exs
 def deps do
   [
-    {:tink, "~> 0.1"},
-
-    # Optional — enable caching
-    {:cachex, "~> 4.1"},
-
-    # Optional — enable rate limiting
-    {:hammer, "~> 7.2"}
+    {:tink, "~> 1.0"}
   ]
 end
 ```
 
-## Quick Start
-
-```elixir
-# 1. Configure credentials (config/runtime.exs)
-config :tink,
-  client_id:     System.fetch_env!("TINK_CLIENT_ID"),
-  client_secret: System.fetch_env!("TINK_CLIENT_SECRET")
-
-# 2. Build a client
-{:ok, client} = Tink.Client.new(
-  client_id:     "your_client_id",
-  client_secret: "your_client_secret"
-)
-
-# 3. Authenticate
-{:ok, token} = Tink.Auth.client_credentials(client,
-  scope: "accounts:read,transactions:read"
-)
-client = Tink.Client.with_token(client, token)
-
-# 4. Call the API
-{:ok, accounts} = Tink.Accounts.list(client)
-```
-
-## Products Covered
-
-| Module | Description |
-|---|---|
-| `Tink.Accounts` | Bank account data and balances |
-| `Tink.Transactions` | Full transaction history |
-| `Tink.TransactionsOneTimeAccess` | Single-fetch transaction consent |
-| `Tink.TransactionsContinuousAccess` | Ongoing transaction sync |
-| `Tink.AccountCheck` | Bank account ownership verification |
-| `Tink.BalanceCheck` | Real-time balance verification |
-| `Tink.BusinessAccountCheck` | Business account ownership verification |
-| `Tink.IncomeCheck` | Income stream analysis and PDF reports |
-| `Tink.ExpenseCheck` | Spending categorisation and analysis |
-| `Tink.RiskInsights` | Risk scoring and anomaly signals |
-| `Tink.RiskCategorisation` | Transaction-level risk categories |
-| `Tink.Investments` | Investment accounts and holdings |
-| `Tink.Loans` | Loan and mortgage accounts |
-| `Tink.Budgets` | User budget creation and tracking |
-| `Tink.CashFlow` | Cash flow analysis |
-| `Tink.FinancialCalendar` | Upcoming financial events |
-| `Tink.Statistics` | Aggregated financial statistics |
-| `Tink.Categories` | Tink transaction categories |
-| `Tink.Users` | Tink user management |
-| `Tink.Providers` | Bank provider metadata |
-| `Tink.Link` | Tink Link URL generation |
-| `Tink.Connectivity` | Provider connectivity checks |
+Documentation is published on [HexDocs](https://hexdocs.pm/tink).
 
 ## Configuration
 
 ```elixir
+# config/config.exs
 config :tink,
-  client_id:            System.get_env("TINK_CLIENT_ID"),
-  client_secret:        System.get_env("TINK_CLIENT_SECRET"),
-  base_url:             "https://api.tink.com",  # default
-  timeout:              30_000,                   # ms
-  max_retries:          3,
-  enable_rate_limiting: true,
-  cache: [
-    enabled:  true,
-    max_size: 1_000
-  ]
+  client_id: System.get_env("TINK_CLIENT_ID"),
+  client_secret: System.get_env("TINK_CLIENT_SECRET"),
+  webhook_secret: System.get_env("TINK_WEBHOOK_SECRET")
 ```
 
-See the [Configuration guide](guides/configuration.md) for the full reference.
+See `config/config.exs` in this repo for the full set of options (base
+URLs, timeouts, retries, cache, and rate-limit settings) and their defaults.
 
-## Documentation
+## Quick start
 
-Full documentation is available on [HexDocs](https://hexdocs.pm/tink).
+```elixir
+# 1. Get an app-level access token (client_credentials grant)
+{:ok, client} = Tink.Auth.client_credentials(scope: "accounts:read,transactions:read")
 
-- [Getting Started](guides/getting-started.md)
-- [Authentication](guides/authentication.md)
-- [Configuration](guides/configuration.md)
-- [Error Handling](guides/advanced/error-handling.md)
-- [Caching](guides/advanced/caching.md)
-- [Rate Limiting](guides/advanced/rate-limiting.md)
-- [Telemetry](guides/advanced/telemetry.md)
-- [Webhooks](guides/advanced/webhooks.md)
-- [Testing](guides/advanced/testing.md)
+# 2. Use it to call the API
+{:ok, accounts} = Tink.Accounts.list(client)
+
+# 3. For end-user data, create a permanent user and an authorization grant,
+#    then exchange the resulting code for a user-scoped token
+{:ok, %{"code" => code}} =
+  Tink.Auth.create_authorization(client, user_id: user_id, scope: "accounts:read")
+
+{:ok, user_client} = Tink.Auth.user_client(code: code)
+{:ok, transactions} = Tink.Transactions.list(user_client)
+```
+
+See the guides under `guides/advanced/` for authentication flows (including
+mTLS), caching, error handling, and rate limiting.
+
+## Status
+
+This package targets Tink's documented API surface as of mid-2026. If you
+notice an endpoint, scope, or behavior that's out of date, please open an
+issue — Tink's docs are a single-page app that's not always crawlable, so
+some details were cross-checked via cached search results rather than a
+live fetch.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](LICENSE).
